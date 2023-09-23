@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+function help() {
+cat <<EOF
+  By: uriid1
+  Counts the number of files, lines, and characters in the files of the specified directory.
+
+  Example:
+  $0 path/to/dir
+EOF
+}
+
+if ! [[ -z "$1" ]]; then
+  directory=$1
+else
+  directory=$PWD
+fi
+
+# Check directory exists
+if [ ! -d "$directory" ]; then
+  if [[ "$1" == "--help" || "$1" == "-help" ]]; then
+    help
+    exit 0
+  fi
+
+  echo "Erorr ${directory} not a directory"
+  exit 1
+fi
+
+# Recursive find files
+files=0
+lines=0
+characters=0
+
+for file in $(find "$directory" -type f -not -path '*/\.*'); do
+  files=$((files + 1))
+  lines=$((lines + $(wc -l < "$file")))
+  characters=$((characters + $(wc -m < "$file")))
+done
+
+# Result
+echo "Files: ${files}"
+echo "Lines: ${lines}"
+echo "Symbols: ${characters}" 

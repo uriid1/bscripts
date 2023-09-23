@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+
+function help() {
+cat <<EOF
+  By: uriid1
+  This script displays memory information for a process specified by PID or process name.
+
+  Usage:
+    $0 --pid <PID>
+    $0 --name <Process Name>
+
+  Options:
+    --pid, -p <PID>           Get process information by its PID.
+    --name, -n <Process Name> Get process information by its name.
+
+  Example:
+    $0 --pid 12345
+    $0 --name my_process
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit 1
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pid | -p)
+      if [ -z "$2" ]; then
+        echo "An argument is expected for the $1 option."
+        exit 1
+      fi
+      pid="$2"
+      process_name=$(ps -p "$pid" -o comm=)
+      shift 2
+      ;;
+
+    --name | -n)
+      if [ -z "$2" ]; then
+        echo "An argument is expected for the $1 option."
+        exit 1
+      fi
+      process_name="$2"
+      pid=$(pgrep "$process_name")
+      shift 2
+      ;;
+
+    --help | -help)
+      help
+      exit 1
+    ;;
+
+    *)
+      echo "Invalid option or argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+if [ -z "$pid" ] || [ -z "$process_name" ]; then
+  echo "Process not found"
+  exit 1
+fi
+
+mem_info=$(ps -o pid= -o vsz= -o rss= -p $pid)
+
+pid=$(echo "$mem_info" | awk '{print $1}')
+virtual_memory=$(echo "$mem_info" | awk '{print $2}')
+resident_set_memory=$(echo "$mem_info" | awk '{print $3}')
+
+# $1 - number
+function floor2f() {
+  local number=$1
+  echo $(awk '{printf "%.2f", $1}' <<< $number)
+}
+
+# $1 - data
+function calc() {
+  local data=$1
+  echo $(bc -l <<< "$data")
+}
+
+cat <<EOF
+Process: $pid | $process_name
+VSZ:
+  $virtual_memory KB
+  $(floor2f $(calc "($virtual_memory/1024)")) MB
+  $(floor2f $(calc "($virtual_memory/(1024*1024))")) GB
+RSS:
+  $resident_set_memory KB
+  $(floor2f $(calc "($resident_set_memory/1024)")) MB
+  $(floor2f $(calc "($resident_set_memory/(1024*1024))")) GB
+EOF

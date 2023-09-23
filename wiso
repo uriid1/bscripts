@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+
+# Constants
+readonly version="1.1"
+readonly c_error='\033[5m'
+readonly c_yellow='\033[33m'
+readonly c_red='\033[31m'
+readonly c_green='\033[32m'
+readonly c_def='\033[0m'
+
+# Global variables
+error=0
+findpath="/home/$USER"
+
+function help() {
+cat <<EOF
+  By: uriid1
+  Version: $version
+
+  Usage:
+    $0 [OPTIONS]
+
+  Options:
+    --find-path, -FP Set the find path (default: $findpath)
+    --iso, -I Set the iso file path
+
+  Example:
+    $0 --iso ~/iso/manjaro-kde.iso
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit 0
+fi
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --find-path | -FP)
+      if [ -z "$2" ]; then
+        echo "An argument is expected for the $1 option."
+        exit 1
+      fi
+
+      findpath="$2"
+      shift 2
+      ;;
+
+    --iso | -I)
+      if [ -z "$2" ]; then
+        echo "An argument is expected for the $1 option."
+        exit 1
+      fi
+
+      isopath="$2"
+      shift 2
+      ;;
+
+    --help | -help)
+      help
+      exit 1
+    ;;
+
+    *)
+      echo "Error: Invalid option or argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# Display important information
+echo -e "By: ${c_green}uriid1${c_def}"
+echo -e "Version: ${c_yellow}$version${c_def}\n"
+
+# Check for the existence of required tools in the OS
+parr=(dd readlink find sed lsblk wipefs head)
+
+pcheck() {
+  local pname=$(which $1 . 2>/dev/null)
+
+  if [ -n "$pname" ]; then
+    echo "${c_green}Ok${c_def}"
+  else
+    echo "${c_error}${c_red}Fail${c_def}"
+  fi
+}
+
+# If all required software is available
+echo -e "Checking tools:"
+for ((i = 0; i < ${#parr[*]}; ++i)); do
+  satus=$(pcheck ${parr[$i]})
+
+  if [ "$status" == "Fail" ]; then
+    error=$((error+1))
+  fi
+
+  pinfo+=( $(echo "|${parr[$i]}|-|$satus|\n") )
+done
+
+if ! [ "$error" -le "0" ]; then
+  echo -e "Oops! It seems you don't have all the required software installed."
+  exit 1
+fi
+
+# Display information about software availability
+echo -e "${pinfo[@]}" | column -t -s '|'
+echo
+
+# Get a list of connected USB devices
+for i in /dev/disk/by-id/usb*; do
+  usb_name_arr+=( $(echo $i | sed '/part/d') )
+done
+
+# If at least one USB device is found
+if ! [[ "${usb_name_arr[0]}" != "/dev/disk/by-id/usb*" ]]; then
+  echo "No USB devices were identified!"
+  exit 1
+fi
+
+# Format the output for user-friendliness
+for ((i = 0; i < ${#usb_name_arr[*]}; ++i)); do
+  # Get mount points
+  usb_mount_arr+=( $(readlink -f ${usb_name_arr[$i]}) )
+  # Format USB device names
+  usb_name_arr_sed+=( $(echo ${usb_name_arr[$i]} | sed 's/.*usb-\(.*\)-[0-9]:.*/\1/' | cut -c 1-24) )
+  # Get USB device sizes
+  usb_size_arr+=( $(lsblk -o SIZE ${usb_mount_arr[$i]} | sed '/SIZE/d' | head -n1) )
+
+  # Store information about USB devices
+  usb_info+=( $(echo "$i)|${usb_mount_arr[$i]}|${usb_name_arr_sed[$i]}|${usb_size_arr[$i]}\n") )
+done
+
+# Display information about USB devices
+echo -e "index|Mount|Disk|Size|\n ${usb_info[@]}" | column -t -s '|'
+echo
+
+# Ask for the index of the target USB device
+read -p "Enter the USB drive index (0-$((${#usb_name_arr[*]}-1))): " usb_index
+
+# Function to find ISO images
+find_iso() {
+  echo -e "Found ISO images: \n"
+  iso_list+=( $(find $findpath -type f -name "*.iso") )
+
+  # If at least one ISO image is found
+  if [[ "${#iso_list[*]}" == "0" ]]; then
+    return 1
+  fi
+
+  # Display a list of found ISO images
+  for ((i = 0; i < ${#iso_list[*]}; ++i)); do
+    iso_found+=( $(echo -e "$i)|${iso_list[$i]##*/} \n") )
+  done
+
+  echo -e "index | Name \n ${iso_found[@]}" | column -t -s '|'
+  echo
+
+  local usb_count=$((${#iso_list[*]}-1))
+  read -p "Select the ISO image (0-$usb_count): " iso
+  
+  return 0
+}
+
+# Function to write ISO to USB
+# $1 - USB index
+# $2 - Iso path
+write_iso() {
+  local usb_index=$1
+  local isopath=$2
+  local usb_name=${usb_name_arr_sed[$usb_index]}
+  local usb_mount=${usb_mount_arr[$usb_index]}
+
+  echo
+  echo "You have chosen:"
+  echo " USB: $usb_name $usb_mount"
+  echo " ISO: $isopath"
+  echo
+  echo "Enter the password for recording the image."
+  sudo -v
+
+  sudo wipefs --all $usb_mount . 2>/dev/null
+  sudo dd bs=4M if=$isopath of=$usb_mount status=progress oflag=sync
+  sudo -k
+}
+
+# Write iso
+if [ -n "$isopath" ]; then
+  write_iso "$usb_index" "$isopath"
+  exit 0
+fi
+
+# Find and write
+if [ -n "$findpath" ]; then
+  if ! find_iso; then
+    echo "Error. No one ISO found."
+    exit 1
+  fi
+
+  write_iso "$usb_index" "${iso_list[$iso]}"
+fi

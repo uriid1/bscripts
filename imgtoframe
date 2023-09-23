@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+
+# Const
+readonly version="1.1"
+
+# Vars
+width=1024
+height=1024
+frame=32
+image="nil"
+output_name="output"
+
+function help() {
+  cat <<EOF
+  By: uriid1
+  Version: $version
+  This script resizes an image and adds a frame to it.
+
+  Usage:
+    $0 [OPTIONS]
+
+  Options:
+    --frame, -f, -F     Set the frame size (default: 32)
+    --width, -w, -W     Set the output width (default: 1024)
+    --height, -h, -H    Set the output height (default: 1024)
+    --image, -i, -I     Specify the input image file (required)
+    --output, -o, -O    Specify the output file name (default: "output")
+
+  Example:
+    $0 -i input.jpg -w 800 -h 600 -f 20 -o output.png
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit 1
+fi
+
+# $1 - path/to/image
+# $2 - width
+# $3 - height
+# $4 - frame
+# $5 - output name
+function convert_image() { 
+  local file=$1
+  local width=$2
+  local height=$3
+  local frame=$4
+  local output="$5.${file: -3}"
+
+  if [[ -z "$output" ]]; then
+    output_name="$output_name_$file"
+  else
+    output_name=$output
+  fi
+
+  # Get Width and Height
+  local pw
+  local ph
+  read pw ph < <(convert "$file" -format "%w %h" info:)
+  
+  # Aspect ratio
+  local ratio=$(bc -l <<< "$pw/$ph")
+  
+  local new_width
+  local new_height
+  if [ $pw -gt $ph ];
+  then
+    # New height relative to new width
+    new_width=$((width - frame))
+    new_height=$(bc -l <<< "$new_width/$ratio")
+  else
+    # New width relative to new height
+    new_height=$((height - frame))
+    new_width=$(bc -l <<< "$new_height*$ratio")
+  fi
+  
+  # Pos in the center
+  local PX=$(bc -l <<< "($width-$new_width)/2")
+  local PY=$(bc -l <<< "($height-$new_height)/2")
+
+  convert -size $width"x"$height xc:white \
+    -draw "image over $PX,$PY $new_width,$new_height \"$file\"" $output_name
+  
+  echo "Finished: $output_name"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help | -help)
+      help
+      exit 1
+    ;;
+
+    --frame | -f | -F)
+      if [ -n "$2" ]; then
+        frame="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+    ;;
+
+    --width | -w | -W)
+      if [ -n "$2" ]; then
+        width="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+    ;;
+
+    --height | -h | -H)
+      if [ -n "$2" ]; then
+        height="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+    ;;
+
+    --image | -i | -I)
+      if [ -n "$2" ]; then
+        image="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+    ;;
+
+    --output | -o | -O)
+      if [ -n "$2" ]; then
+        output_name="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+    ;;
+
+    *)
+      echo "Invalid argument: $1"
+      exit 1
+    ;;
+  esac
+done
+
+if ! [ -e "$image" ]; then
+  echo "Error. \"$image\" is not exists"
+  exit 0
+fi
+
+echo "Width: $width | Height $height | Frame $frame"
+convert_image "$image" "$width" "$height" "$frame" "$output_name"

@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+
+function help() {
+cat <<EOF
+  By: uriid1
+  Execute a script/command with a time-out.
+
+  Usage:
+  --timeout | -t | -T
+    Timeout duration for the command.
+    Syntax:
+      10s - 10 seconds,
+      10m - 10 minutes,
+      10h - 10 hours
+
+  --script | -s | -S
+    Source script.
+
+  Example:
+  $0 -t 5s -s "echo 'Hello!'"
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit 1
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --timeout | -t | -T)
+      if [ -n "$2" ]; then
+        timeout="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+      ;;
+
+    --script | -s | -S)
+      if [ -n "$2" ]; then
+        script="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit 1
+      fi
+      ;;
+
+    --help | -h | -H)
+      help
+      exit 1
+    ;;
+
+    *)
+      echo "Invalid argument: $1"
+      exit 1
+      ;;
+  esac
+done
+
+# $1 - value
+is_number() {
+  local value=$1
+  local re="^[0-9]+$"
+
+  if [[ $value =~ $re ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+# $1 - time
+parse_time() {
+  local time="$1"
+  local unit="${time: -1}"     # (s, m, h)
+  local value="${time:0: -1}"  # all symbols
+
+  if ! is_number $value; then
+    echo "-1";
+    exit 0
+  fi
+
+  case "$unit" in
+    s | S)
+      echo "$value"
+    ;;
+
+    m | M)
+      echo "$((value * 60))"
+    ;;
+
+    h | H)
+      echo "$((value * 3600))"
+    ;;
+    
+    *)
+      echo "-1";
+      exit 1
+    ;;
+  esac
+}
+
+# Convert to sec
+timeout_seconds=$(parse_time "$timeout")
+
+if [ $timeout_seconds -le 0 ]; then
+  echo "Timeout less equal 0."
+  exit 1
+fi
+
+#
+echo "Sleep $timeout..."
+sleep "$timeout_seconds"
+
+#
+eval "$script"

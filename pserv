@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+function help() {
+cat <<EOF
+  By: uriid1
+  Run an local HTTP server.
+
+  Usage:
+    $0 [OPTIONS]
+
+  Options:
+    --path <directory>  Set the path for serving files (default: \$HOME)
+    --port <port>       Set the port (default: 8000)
+
+  Example:
+    $0 --path \$HOME/public
+EOF
+}
+
+# Default path
+path="$HOME"
+ip=$(ip a | sed -En 's/127.0.0.1//;s/.*inet (addr:)?(([0-9]*\.){3}[0-9]*).*/\2/p')
+port=8000
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --path)
+      if [ -n "$2" ]; then
+        path="$2"
+        shift 2
+      else
+        echo "Argument missing for option $1"
+        exit 1
+      fi
+      ;;
+
+    --port)
+      if [ -n "$2" ]; then
+        port="$2"
+        shift 2
+      else
+        echo "Argument missing for option $1"
+        exit 1
+      fi
+      ;;
+
+    --help)
+      help
+      exit 0
+      ;;
+
+    *)
+      echo "Unknown option $1"
+      exit 1
+      ;;
+  esac
+done
+
+echo "HTTP Server started: $ip:$port"
+python -m http.server --directory "$path" $port
