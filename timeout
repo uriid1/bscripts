@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
 cat <<EOF
   By: uriid1
   Execute a script/command with a time-out.
@@ -17,7 +19,7 @@ cat <<EOF
     Source script.
 
   Example:
-  $0 -t 5s -s "echo 'Hello!'"
+  $sname -t 5s -s "echo 'Hello!'"
 EOF
 }
 

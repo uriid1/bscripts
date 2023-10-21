@@ -13,19 +13,21 @@ error=0
 findpath="/home/$USER"
 
 function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
 cat <<EOF
   By: uriid1
   Version: $version
 
   Usage:
-    $0 [OPTIONS]
+    $sname [OPTIONS]
 
   Options:
     --find-path, -FP Set the find path (default: $findpath)
     --iso, -I Set the iso file path
 
   Example:
-    $0 --iso ~/iso/manjaro-kde.iso
+    $sname --iso ~/iso/manjaro-kde.iso
 EOF
 }
 

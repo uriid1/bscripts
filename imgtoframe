@@ -11,13 +11,15 @@ image="nil"
 output_name="output"
 
 function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
   cat <<EOF
   By: uriid1
   Version: $version
   This script resizes an image and adds a frame to it.
 
   Usage:
-    $0 [OPTIONS]
+    $sname [OPTIONS]
 
   Options:
     --frame, -f, -F     Set the frame size (default: 32)
@@ -27,7 +29,7 @@ function help() {
     --output, -o, -O    Specify the output file name (default: "output")
 
   Example:
-    $0 -i input.jpg -w 800 -h 600 -f 20 -o output.png
+    $sname -i input.jpg -w 800 -h 600 -f 20 -o output.png
 EOF
 }
 

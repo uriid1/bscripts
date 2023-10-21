@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
 
 function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
 cat <<EOF
   By: uriid1
   Run an local HTTP server.
 
   Usage:
-    $0 [OPTIONS]
+    $sname [OPTIONS]
 
   Options:
     --path <directory>  Set the path for serving files (default: \$HOME)
     --port <port>       Set the port (default: 8000)
 
   Example:
-    $0 --path \$HOME/public
+    $sname --path \$HOME/public
 EOF
 }
 

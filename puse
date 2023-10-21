@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 
 function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
 cat <<EOF
   By: uriid1
   This script displays memory information for a process specified by PID or process name.
 
   Usage:
-    $0 --pid <PID>
-    $0 --name <Process Name>
+    $sname --pid <PID>
+    $sname --name <Process Name>
 
   Options:
     --pid, -p <PID>           Get process information by its PID.
     --name, -n <Process Name> Get process information by its name.
 
   Example:
-    $0 --pid 12345
-    $0 --name my_process
+    $sname --pid 12345
+    $sname --name my_process
 EOF
 }
 
