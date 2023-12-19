@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 local_ip=$(ip a | sed -En 's/127.0.0.1//;s/.*inet (addr:)?(([0-9]*\.){3}[0-9]*).*/\2/p')
-public_ip=$(wget https://ipinfo.io/ip -qO -)
-
 echo 'Local IP: '$local_ip
+
+public_ip=$(wget https://ipinfo.io/ip -qO -)
 echo 'Public IP: '$public_ip
