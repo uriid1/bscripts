@@ -1,7 +1,28 @@
 #!/usr/bin/env bash
 
-local_ip=$(ip a | sed -En 's/127.0.0.1//;s/.*inet (addr:)?(([0-9]*\.){3}[0-9]*).*/\2/p')
-echo 'Local IP: '$local_ip
+function pLocalIp() {
+  local ip=$(ip a | sed -En 's/127.0.0.1//;s/.*inet (addr:)?(([0-9]*\.){3}[0-9]*).*/\2/p')
+  echo "Local: ${ip}"
+}
 
-public_ip=$(wget https://ipinfo.io/ip -qO -)
-echo 'Public IP: '$public_ip
+function pPublicIp() {
+  local ip=$(wget https://ipinfo.io/ip -qO -)
+  echo "Public: ${ip}"
+}
+
+if [ $# -eq 0 ]; then
+  pLocalIp
+  exit 0
+fi
+
+case "$1" in
+  --public | -p)
+    pPublicIp
+  ;;
+
+  --all | -a)
+  pLocalIp
+  pPublicIp
+  ;;
+esac
+
