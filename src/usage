@@ -1,5 +1,26 @@
 #!/bin/env bash
 
+readonly EXIT_SUCCESS=0
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Space of used files.
+
+Example:
+  $sname /home/$USER/*
+EOF
+}
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
 echo -e "-----\t-------"
 echo -e "Usage\tFile(s)"
 echo -e "-----\t-------"

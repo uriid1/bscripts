@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Version: $version
+  Blocking IP addresses of domains using iptables.
+
+Usage:
+  $sname [OPTIONS]
+
+Options:
+  --domains, -d    List of domains
+  --chains, -с     List of domains
+  --interface, -i  Interface (Default eth0)
+
+Example:
+  $sname --domains site-one.com site-two.com --interface eth0 --chains FORWARD OUTPUT INPUT
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit $EXIT_FAILURE
+fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+INTERFACE="eth0"
+CHAINS=()
+DOMAINS=()
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --domains | -d)
+      shift
+      while [[ "$#" -gt 0 && "$1" != --* && "$1" != -* ]]; do
+        DOMAINS+=("$1")
+        shift
+      done
+    ;;
+
+    --chains | -c)
+      shift
+      while [[ "$#" -gt 0 && "$1" != --* && "$1" != -* ]]; do
+        CHAINS+=("$1")
+        shift
+      done
+    ;;
+
+    --interface | -i)
+      if [ -n "$2" ]; then
+        INTERFACE="$2"
+        shift 2
+      else
+        echo "Missing argument for $1 option"
+        exit $EXIT_FAILURE
+      fi
+    ;;
+
+  *)
+    shift
+  ;;
+  esac
+done
+
+sudo -v
+for DOMAIN in "${DOMAINS[@]}"; do
+  IPS=$(dig +short $DOMAIN)
+  for IP in $IPS; do
+    if [[ $IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+      for chain in "${CHAINS[@]}"; do
+        echo "Blocked: domain: $DOMAIN Ip: $IP Chain: $chain"
+        case $chain in
+          "FORWARD" | "forward")
+            sudo iptables -A FORWARD -i $INTERFACE -d $IP -j REJECT
+          ;;
+          "OUTPUT" | "output")
+            sudo iptables -A OUTPUT -o $INTERFACE -d $IP -j REJECT
+          ;;
+          "INPUT" | "input")
+            sudo iptables -A INPUT -i $INTERFACE -s $IP -j REJECT
+          ;;
+        esac
+      done
+    fi
+  done
+done
+sudo -k

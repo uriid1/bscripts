@@ -2,6 +2,8 @@
 
 # Const
 readonly version="1.1"
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
 
 # Vars
 width=1024
@@ -13,30 +15,37 @@ output_name="output"
 function help() {
   local sname=$(echo "$0" | sed 's/.*\///')
 
-  cat <<EOF
-  By: uriid1
+cat <<EOF
+By: uriid1
   Version: $version
   This script resizes an image and adds a frame to it.
 
-  Usage:
-    $sname [OPTIONS]
+Usage:
+  $sname [OPTIONS]
 
-  Options:
-    --frame, -f, -F     Set the frame size (default: 32)
-    --width, -w, -W     Set the output width (default: 1024)
-    --height, -h, -H    Set the output height (default: 1024)
-    --image, -i, -I     Specify the input image file (required)
-    --output, -o, -O    Specify the output file name (default: "output")
+Options:
+  --frame, -f, -F     Set the frame size (default: 32)
+  --width, -w, -W     Set the output width (default: 1024)
+  --height, -h, -H    Set the output height (default: 1024)
+  --image, -i, -I     Specify the input image file (required)
+  --output, -o, -O    Specify the output file name (default: "output")
 
-  Example:
-    $sname -i input.jpg -w 800 -h 600 -f 20 -o output.png
+Example:
+  $sname -i input.jpg -w 800 -h 600 -f 20 -o output.png
 EOF
 }
 
 if [ $# -eq 0 ]; then
   help
-  exit 1
+  exit $EXIT_FAILURE
 fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
 
 # $1 - path/to/image
 # $2 - width
@@ -91,7 +100,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --help | -help)
       help
-      exit 1
+      exit $EXIT_FAILURE
     ;;
 
     --frame | -f | -F)
@@ -100,7 +109,7 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
     ;;
 
@@ -110,7 +119,7 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
     ;;
 
@@ -120,7 +129,7 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
     ;;
 
@@ -130,7 +139,7 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
     ;;
 
@@ -140,20 +149,20 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
     ;;
 
     *)
       echo "Invalid argument: $1"
-      exit 1
+      exit $EXIT_FAILURE
     ;;
   esac
 done
 
 if ! [ -e "$image" ]; then
   echo "Error. \"$image\" is not exists"
-  exit 0
+  exit $EXIT_SUCCESS
 fi
 
 echo "Width: $width | Height $height | Frame $frame"

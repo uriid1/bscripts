@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  This script displays memory information for a process specified by PID or process name.
+
+Usage:
+  $sname --pid <PID>
+  $sname --name <Process Name>
+
+Options:
+  --pid, -p <PID>           Get process information by its PID.
+  --name, -n <Process Name> Get process information by its name.
+
+Example:
+  $sname --pid 12345
+  $sname --name my_process
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit $EXIT_SUCCESS
+fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --pid | -p)
+      if [ -z "$2" ]; then
+        echo "An argument is expected for the $1 option."
+        exit $EXIT_SUCCESS
+      fi
+      pid="$2"
+      process_name=$(ps -p "$pid" -o comm=)
+      shift 2
+    ;;
+
+    --name | -n)
+      if [ -z "$2" ]; then
+        echo "An argument is expected for the $1 option."
+        exit $EXIT_SUCCESS
+      fi
+      process_name="$2"
+      pids=$(pgrep "$process_name")
+      if [ -z "$pids" ]; then
+        echo "Process not found"
+        exit $EXIT_SUCCESS
+      fi
+      shift 2
+    ;;
+
+    *)
+      echo "Invalid option or argument: $1"
+      exit $EXIT_SUCCESS
+    ;;
+  esac
+done
+
+if [ -z "$pid" ] && [ -z "$pids" ]; then
+  echo "Process not found"
+  exit $EXIT_SUCCESS
+fi
+
+# Function to format and calculate memory sizes
+function floor2f() {
+  local number=$1
+  echo $(awk '{printf "%.2f", $1}' <<< "$number")
+}
+
+function calc() {
+  local data=$1
+  echo $(bc -l <<< "$data")
+}
+
+# Initialize total memory values
+total_virtual_memory=0
+total_resident_set_memory=0
+
+# Process memory info for each PID
+if [ ! -z "$pids" ]; then
+  for current_pid in $pids; do
+    mem_info=$(ps -o pid= -o vsz= -o rss= -p $current_pid)
+
+    virtual_memory=$(echo "$mem_info" | awk '{print $2}')
+    resident_set_memory=$(echo "$mem_info" | awk '{print $3}')
+
+    # Add current process memory to totals
+    total_virtual_memory=$((total_virtual_memory + virtual_memory))
+    total_resident_set_memory=$((total_resident_set_memory + resident_set_memory))
+
+    echo "Process: $current_pid | $process_name"
+  done
+fi
+
+if [ ! -z "$pid" ]; then
+  mem_info=$(ps -o pid= -o vsz= -o rss= -p $pid)
+
+  virtual_memory=$(echo "$mem_info" | awk '{print $2}')
+  resident_set_memory=$(echo "$mem_info" | awk '{print $3}')
+
+  # Add current process memory to totals
+  total_virtual_memory=$((total_virtual_memory + virtual_memory))
+  total_resident_set_memory=$((total_resident_set_memory + resident_set_memory))
+
+  echo "Process: $pid | $process_name"
+fi
+
+# Output total memory usage
+cat <<EOF
+Total memory usage for $process_name:
+VSZ:
+  $total_virtual_memory KB
+  $(floor2f $(calc "($total_virtual_memory/1024)")) MB
+  $(floor2f $(calc "($total_virtual_memory/(1024*1024))")) GB
+RSS:
+  $total_resident_set_memory KB
+  $(floor2f $(calc "($total_resident_set_memory/1024)")) MB
+  $(floor2f $(calc "($total_resident_set_memory/(1024*1024))")) GB
+EOF
+

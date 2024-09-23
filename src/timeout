@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
 function help() {
   local sname=$(echo "$0" | sed 's/.*\///')
 
 cat <<EOF
-  By: uriid1
+By: uriid1
   Execute a script/command with a time-out.
 
-  Usage:
+Usage:
   --timeout | -t | -T
     Timeout duration for the command.
     Syntax:
@@ -18,15 +21,22 @@ cat <<EOF
   --script | -s | -S
     Source script.
 
-  Example:
+Example:
   $sname -t 5s -s "echo 'Hello!'"
 EOF
 }
 
 if [ $# -eq 0 ]; then
   help
-  exit 1
+  exit $EXIT_SUCCESS
 fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -36,9 +46,9 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
-      ;;
+    ;;
 
     --script | -s | -S)
       if [ -n "$2" ]; then
@@ -46,19 +56,14 @@ while [[ $# -gt 0 ]]; do
         shift 2
       else
         echo "Missing argument for $1 option"
-        exit 1
+        exit $EXIT_FAILURE
       fi
-      ;;
-
-    --help | -h | -H)
-      help
-      exit 1
     ;;
 
     *)
       echo "Invalid argument: $1"
-      exit 1
-      ;;
+      exit $EXIT_FAILURE
+    ;;
   esac
 done
 
@@ -100,7 +105,7 @@ parse_time() {
     
     *)
       echo "-1";
-      exit 1
+      exit $EXIT_FAILURE
     ;;
   esac
 }
@@ -110,7 +115,7 @@ timeout_seconds=$(parse_time "$timeout")
 
 if [ $timeout_seconds -le 0 ]; then
   echo "Timeout less equal 0."
-  exit 1
+  exit $EXIT_FAILURE
 fi
 
 #

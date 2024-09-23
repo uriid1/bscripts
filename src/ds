@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Counts the number of files, lines, and characters in the files of the specified directory.
+
+Options:
+  --formats, -f   Formats like: lua js sh
+
+Example:
+  $sname --dir /home/user/js/ -formats js json
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit $EXIT_FAILURE
+fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+FORMATS=()
+DIR=$PWD
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --formats | -f)
+      shift
+      while [[ "$#" -gt 0 && "$1" != --* && "$1" != -* ]]; do
+        FORMATS+=("$1")
+        shift
+      done
+    ;;
+
+    --dir | -d)
+      DIR=$2
+      shift 2
+    ;;
+  esac
+done
+
+files=0
+lines=0
+
+find_expr=""
+for format in "${FORMATS[@]}"; do
+  find_expr+=" -name '*.${format}' -o"
+done
+find_expr=${find_expr::-3}
+
+for file in $(eval 'find '"${DIR}" '-type f \( '${find_expr}' \) -not -path '*/\.*''); do
+  files=$((files + 1))
+  lines=$((lines + $(wc -l < "$file")))
+done
+
+echo "Files: ${files}"
+echo "Lines: ${lines}"

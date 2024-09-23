@@ -8,6 +8,9 @@ readonly c_red='\033[31m'
 readonly c_green='\033[32m'
 readonly c_def='\033[0m'
 
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
 # Global variables
 error=0
 findpath="/home/$USER"
@@ -16,57 +19,59 @@ function help() {
   local sname=$(echo "$0" | sed 's/.*\///')
 
 cat <<EOF
-  By: uriid1
+By: uriid1
   Version: $version
 
-  Usage:
-    $sname [OPTIONS]
+Usage:
+  $sname [OPTIONS]
 
-  Options:
-    --find-path, -FP Set the find path (default: $findpath)
-    --iso, -I Set the iso file path
+Options:
+  --find-path, -fp  Set the find path (default: $findpath)
+  --iso, -i         Set the iso file path
 
-  Example:
-    $sname --iso ~/iso/manjaro-kde.iso
+Example:
+  $sname --iso ~/iso/manjaro-kde.iso
 EOF
 }
 
 if [ $# -eq 0 ]; then
   help
-  exit 0
+  exit $EXIT_SUCCESS
 fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --find-path | -FP)
+    --find-path | -FP | -fp)
       if [ -z "$2" ]; then
         echo "An argument is expected for the $1 option."
-        exit 1
+        exit $EXIT_FAILURE
       fi
 
       findpath="$2"
       shift 2
-      ;;
+    ;;
 
-    --iso | -I)
+    --iso | -I | -i)
       if [ -z "$2" ]; then
         echo "An argument is expected for the $1 option."
-        exit 1
+        exit $EXIT_FAILURE
       fi
 
       isopath="$2"
       shift 2
-      ;;
-
-    --help | -help)
-      help
-      exit 1
     ;;
 
     *)
       echo "Error: Invalid option or argument: $1"
-      exit 1
-      ;;
+      exit $EXIT_FAILURE
+    ;;
   esac
 done
 
@@ -101,7 +106,7 @@ done
 
 if ! [ "$error" -le "0" ]; then
   echo -e "Oops! It seems you don't have all the required software installed."
-  exit 1
+  exit $EXIT_FAILURE
 fi
 
 # Display information about software availability
@@ -116,7 +121,7 @@ done
 # If at least one USB device is found
 if ! [[ "${usb_name_arr[0]}" != "/dev/disk/by-id/usb*" ]]; then
   echo "No USB devices were identified!"
-  exit 1
+  exit $EXIT_FAILURE
 fi
 
 # Format the output for user-friendliness
@@ -188,14 +193,14 @@ write_iso() {
 # Write iso
 if [ -n "$isopath" ]; then
   write_iso "$usb_index" "$isopath"
-  exit 0
+  exit $EXIT_SUCCESS
 fi
 
 # Find and write
 if [ -n "$findpath" ]; then
   if ! find_iso; then
     echo "Error. No one ISO found."
-    exit 1
+    exit $EXIT_FAILURE
   fi
 
   write_iso "$usb_index" "${iso_list[$iso]}"

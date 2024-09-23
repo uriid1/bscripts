@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+
+readonly EXIT_SUCCESS=0
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Show your local or pulic ip.
+
+Options:
+  --public, -p  Your public ip
+  --all, -a     Public and local ips
+
+Example:
+  $sname /home/$USER/*
+EOF
+}
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+function pLocalIp() {
+  local ips=$(ip -o -4 addr show | awk '{print $2": "$4}' | cut -d/ -f1)
+  echo "Local IP addresses:"
+  echo "$ips"
+}
+
+function pPublicIp() {
+  local ip=$(wget https://ipinfo.io/ip -qO -)
+  echo "Public: ${ip}"
+}
+
+if [ $# -eq 0 ]; then
+  pLocalIp
+  exit $EXIT_SUCCESS
+fi
+
+case "$1" in
+  --public | -p)
+    pPublicIp
+  ;;
+
+  --all | -a)
+  pLocalIp
+  pPublicIp
+  ;;
+esac

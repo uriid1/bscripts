@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Recursive copying of files to your Android device via ADB.
+
+Options:
+  --root  enable root and remount
+
+Example:
+  $sname --root path/to/ /android/path/to/
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit $EXIT_SUCCESS
+fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root | -r)
+      adb root
+      adb remount
+      shift 2
+    ;;
+
+    *)
+      echo "Error: Invalid option or argument: $1"
+      exit $EXIT_FAILURE
+    ;;
+  esac
+done
+
+function push {
+  local path=$1
+  local path_to=$2
+
+  # Создание директории, если её нет
+  adb shell mkdir -p "$path_to"
+
+  # Рекурсивный обход директории
+  for file in "$path"/*; do
+    if [ -d "$file" ]; then
+      local dir_name=$(basename "$file")
+      push "$file" "$path_to/$dir_name"
+    else
+      echo "Copying $file to $path_to"
+      adb push "$file" "$path_to"
+    fi
+  done
+}
+
+push "$1" "$2"

@@ -1,0 +1,17 @@
+#!/usr/bin/env bash 
+
+# Disable ipV6
+# Change TTL
+
+TTL=65
+
+if [ $# -ne 0 ]; then
+  TTL=$1
+fi
+
+sudo -v
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+sudo iptables -t mangle -A POSTROUTING -j TTL --ttl-set $TTL
+sudo -k
