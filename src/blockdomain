@@ -16,7 +16,7 @@ Usage:
 
 Options:
   --domains, -d    List of domains
-  --chains, -с     List of domains
+  --chains, -с     List of chains
   --interface, -i  Interface (Default eth0)
 
 Example:
@@ -75,12 +75,12 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 sudo -v
-for DOMAIN in "${DOMAINS[@]}"; do
-  IPS=$(dig +short $DOMAIN)
+for domain in "${DOMAINS[@]}"; do
+  IPS=$(dig +short $domain)
   for IP in $IPS; do
     if [[ $IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
       for chain in "${CHAINS[@]}"; do
-        echo "Blocked: domain: $DOMAIN Ip: $IP Chain: $chain"
+        echo "Blocked: domain: $domain Ip: $IP Chain: $chain"
         case $chain in
           "FORWARD" | "forward")
             sudo iptables -A FORWARD -i $INTERFACE -d $IP -j REJECT

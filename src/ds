@@ -59,7 +59,7 @@ for format in "${FORMATS[@]}"; do
 done
 find_expr=${find_expr::-3}
 
-for file in $(eval 'find '"${DIR}" '-type f \( '${find_expr}' \) -not -path '*/\.*''); do
+for file in $(eval "find "${DIR}" -type f \( ${find_expr} \) -not -path '*/\.*'"); do
   files=$((files + 1))
   lines=$((lines + $(wc -l < "$file")))
 done

@@ -118,9 +118,5 @@ if [ $timeout_seconds -le 0 ]; then
   exit $EXIT_FAILURE
 fi
 
-#
-echo "Sleep $timeout..."
 sleep "$timeout_seconds"
-
-#
 eval "$script"

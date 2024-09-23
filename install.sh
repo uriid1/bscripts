@@ -24,8 +24,6 @@ install() {
 }
 
 basic_programs=(adb dig iptables wc sysctl wget python bc readlink lsblk column)
-errs=0
-
 for ((i = 0; i < ${#basic_programs[*]}; ++i)); do
   programm="${basic_programs[$i]}"
 

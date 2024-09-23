@@ -122,12 +122,12 @@ fi
 cat <<EOF
 Total memory usage for $process_name:
 VSZ:
-  $total_virtual_memory KB
-  $(floor2f $(calc "($total_virtual_memory/1024)")) MB
   $(floor2f $(calc "($total_virtual_memory/(1024*1024))")) GB
+  $(floor2f $(calc "($total_virtual_memory/1024)")) MB
+  $total_virtual_memory KB
 RSS:
-  $total_resident_set_memory KB
-  $(floor2f $(calc "($total_resident_set_memory/1024)")) MB
   $(floor2f $(calc "($total_resident_set_memory/(1024*1024))")) GB
+  $(floor2f $(calc "($total_resident_set_memory/1024)")) MB
+  $total_resident_set_memory KB
 EOF
 
