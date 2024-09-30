@@ -1,0 +1,44 @@
+#!/bin/env bash
+
+readonly EXIT_SUCCESS=0
+readonly EXIT_FAILURE=1
+
+function help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Shutdown automatically when process completes.
+
+Example:
+  $sname ffmpeg
+  Or with pid
+  $sname 12345
+EOF
+}
+
+if [ $# -eq 0 ]; then
+  help
+  exit $EXIT_FAILURE
+fi
+
+case "$1" in
+  --help | -h)
+    help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+arg=$1
+if ! [[ "$arg" =~ ^[0-9]+$ ]]; then
+  PID=$(pgrep $arg)
+else
+  PID=$arg
+fi
+
+echo "[$PID]: Wait $(ps -p "$PID" -o comm=) to stop..."
+while kill -0 $PID 2>/dev/null; do
+  sleep 10
+done
+
+shutdown -h now
