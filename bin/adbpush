@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
+#
+# By: uriid1
+#   Recursive copying of files to your Android device via ADB.
 
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/fs.sh"
 
 print_help() {
-  local sname=$(echo "$0" | sed 's/.*\///')
+  local sname
+  sname=$(fs::basename "$0")
 
 cat <<EOF
 By: uriid1
@@ -30,22 +42,19 @@ case "$1" in
   ;;
 esac
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --root | -r)
-      adb root
-      adb remount
-      shift 2
-    ;;
+arg::spec flag --root -r
+arg::parse "$@"
 
-    *)
-      echo "Error: Invalid option or argument: $1"
-      exit $EXIT_FAILURE
-    ;;
-  esac
-done
+mapfile -t __paths < <(arg::rest)
+path="${__paths[0]}"
+path_to="${__paths[1]}"
 
-push {
+if arg::has --root; then
+  adb root
+  adb remount
+fi
+
+push() {
   local path=$1
   local path_to=$2
 
@@ -64,4 +73,4 @@ push {
   done
 }
 
-push "$1" "$2"
+push "$path" "$path_to"

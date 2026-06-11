@@ -23,8 +23,7 @@ warn() {
 #
 # Checking that base tools installed 
 #
-
-base_tools=(adb dig iptables wc sysctl wget python bc readlink lsblk column jq)
+base_tools=(adb dig iptables wc sysctl curl python bc readlink lsblk column jq)
 
 for ((i = 0; i < ${#base_tools[*]}; ++i)); do
   tool="${base_tools[$i]}"
@@ -50,9 +49,22 @@ if ! echo "${PATH}" | grep -q "${BIN_PATH}"; then
 fi
 
 #
+# Ensure bash-libs submodule is present (scripts source it)
+#
+readonly LIB_SRC="vendor/bash-libs/lib"
+readonly LIB_DST="${HOME}/.local/bin/uriid1/lib"
+
+if [ ! -f "${LIB_SRC}/const.sh" ]; then
+  warn "bash-libs submodule is not initialized; fetching..."
+  if ! git submodule update --init --recursive; then
+    warn "Failed to initialize bash-libs. Run: git submodule update --init --recursive"
+    exit $EXIT_FAILURE
+  fi
+fi
+
+#
 # Installing
 #
-
 chmod +x bin/*
 
 for script in bin/*; do
@@ -61,3 +73,10 @@ for script in bin/*; do
   log "Copy ${name} to ${BIN_PATH}"
   cp $script ${BIN_PATH}
 done
+
+#
+# Install bash-libs alongside scripts so that ../lib/bash-libs/lib resolves
+#
+log "Copy bash-libs to ${LIB_DST}"
+mkdir -p "${LIB_DST}"
+cp -a "${LIB_SRC}/." "${LIB_DST}/"

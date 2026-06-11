@@ -1,7 +1,16 @@
-#!/usr/bin/env bash 
-
+#!/usr/bin/env bash
+#
 # Disable ipV6
 # Change TTL
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
 
 TTL=65
 

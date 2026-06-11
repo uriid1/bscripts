@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
+#
+# By: uriid1
+#   Show your local ethernet ip or pulic ip.
 
-readonly EXIT_SUCCESS=0
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/net.sh"
 
 print_help() {
   local sname=$(echo "$0" | sed 's/.*\///')
@@ -20,7 +32,7 @@ Example:
 EOF
 }
 
-case "$1" in
+case "${1:-}" in
   --help | -h)
     print_help
     exit $EXIT_SUCCESS
@@ -37,29 +49,23 @@ show_local_ethernet_ip() {
 }
 
 show_public_ip() {
-  local ip=$(wget https://ipinfo.io/ip -qO -)
+  local ip=$(net::http_get "https://ipinfo.io/ip")
   echo "${ip}"
 }
 
-case "${1:-}" in
-  -h|--help)
-    print_help
-    exit $EXIT_SUCCESS
-    ;;
-  "")
-    show_local_ethernet_ip
-    exit $EXIT_SUCCESS
-    ;;
-  -p|--public)
-    show_public_ip
-    ;;
-  -a|--all)
-    show_local_ethernet_ip
-    show_public_ip
-    ;;
-  *)
-    echo "Error: Unknown option '$1'" >&2
-    echo "Use --help for usage information" >&2
-    exit 1
-    ;;
-esac
+arg::spec flag --public -p
+arg::spec flag --all -a
+arg::parse "$@"
+
+if arg::has --public; then
+  show_public_ip
+elif arg::has --all; then
+  show_local_ethernet_ip
+  show_public_ip
+elif [[ $# -eq 0 ]]; then
+  show_local_ethernet_ip
+else
+  echo "Error: Unknown option '$1'" >&2
+  echo "Use --help for usage information" >&2
+  exit 1
+fi

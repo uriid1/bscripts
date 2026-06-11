@@ -2,15 +2,17 @@
 
 # Const
 readonly version="1.1"
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
 
-# Vars
-width=1024
-height=1024
-frame=32
-image="nil"
-output_name="output"
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/fs.sh"
 
 print_help() {
   local sname=$(echo "$0" | sed 's/.*\///')
@@ -52,7 +54,7 @@ esac
 # $3 - height
 # $4 - frame
 # $5 - output name
-convert_image() { 
+convert_image() {
   local file=$1
   local width=$2
   local height=$3
@@ -69,10 +71,10 @@ convert_image() {
   local pw
   local ph
   read pw ph < <(convert "$file" -format "%w %h" info:)
-  
+
   # Aspect ratio
   local ratio=$(bc -l <<< "$pw/$ph")
-  
+
   local new_width
   local new_height
   if [ $pw -gt $ph ];
@@ -85,82 +87,58 @@ convert_image() {
     new_height=$((height - frame))
     new_width=$(bc -l <<< "$new_height*$ratio")
   fi
-  
+
   # Pos in the center
   local PX=$(bc -l <<< "($width-$new_width)/2")
   local PY=$(bc -l <<< "($height-$new_height)/2")
 
   convert -size $width"x"$height xc:white \
     -draw "image over $PX,$PY $new_width,$new_height \"$file\"" $output_name
-  
+
   echo "Finished: $output_name"
 }
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
+arg::spec value --frame -f -F
+arg::spec value --width -w -W
+arg::spec value --height -h -H
+arg::spec value --image -i -I
+arg::spec value --output -o -O
+
+arg::parse "$@"
+
+# Validate raw args to preserve the original's strict handling: unknown tokens
+# are rejected (*) and value-options without an argument report "Missing
+# argument". arg::parse otherwise swallows unknown --flags / dangling options.
+__args=("$@")
+__n=${#__args[@]}
+__i=0
+while [[ $__i -lt $__n ]]; do
+  case "${__args[$__i]}" in
+    --frame | -f | -F | --width | -w | -W | --height | -h | -H \
+    | --image | -i | -I | --output | -o | -O)
+      if [[ $(( __i + 1 )) -ge $__n || -z "${__args[$(( __i + 1 ))]}" ]]; then
+        echo "Missing argument for ${__args[$__i]} option"
+        exit $EXIT_FAILURE
+      fi
+      __i=$(( __i + 2 ))
+    ;;
     --help | -help)
-      print_help
-      exit $EXIT_FAILURE
+      __i=$(( __i + 1 ))
     ;;
-
-    --frame | -f | -F)
-      if [ -n "$2" ]; then
-        frame="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
-
-    --width | -w | -W)
-      if [ -n "$2" ]; then
-        width="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
-
-    --height | -h | -H)
-      if [ -n "$2" ]; then
-        height="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
-
-    --image | -i | -I)
-      if [ -n "$2" ]; then
-        image="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
-
-    --output | -o | -O)
-      if [ -n "$2" ]; then
-        output_name="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
-
     *)
-      echo "Invalid argument: $1"
+      echo "Invalid argument: ${__args[$__i]}"
       exit $EXIT_FAILURE
     ;;
   esac
 done
 
-if ! [ -e "$image" ]; then
+frame=$(arg::get --frame 32)
+width=$(arg::get --width 1024)
+height=$(arg::get --height 1024)
+image=$(arg::get --image nil)
+output_name=$(arg::get --output output)
+
+if ! fs::exists "$image"; then
   echo "Error. \"$image\" is not exists"
   exit $EXIT_SUCCESS
 fi

@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/fs.sh"
 
 print_help() {
-  local sname=$(echo "$0" | sed 's/.*\///')
+  local sname=$(fs::basename "$0")
 
 cat <<EOF
 By: uriid1
@@ -36,38 +44,23 @@ case "$1" in
   ;;
 esac
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --pid | -p)
-      if [ -z "$2" ]; then
-        echo "An argument is expected for the $1 option."
-        exit $EXIT_SUCCESS
-      fi
-      pid="$2"
-      process_name=$(ps -p "$pid" -o comm=)
-      shift 2
-    ;;
+arg::spec value --pid -p
+arg::spec value --name -n
+arg::parse "$@"
 
-    --name | -n)
-      if [ -z "$2" ]; then
-        echo "An argument is expected for the $1 option."
-        exit $EXIT_SUCCESS
-      fi
-      process_name="$2"
-      pids=$(pgrep "$process_name")
-      if [ -z "$pids" ]; then
-        echo "Process not found"
-        exit $EXIT_SUCCESS
-      fi
-      shift 2
-    ;;
+if arg::has --pid; then
+  pid=$(arg::get --pid)
+  process_name=$(ps -p "$pid" -o comm=)
+fi
 
-    *)
-      echo "Invalid option or argument: $1"
-      exit $EXIT_SUCCESS
-    ;;
-  esac
-done
+if arg::has --name; then
+  process_name=$(arg::get --name)
+  pids=$(pgrep "$process_name")
+  if [ -z "$pids" ]; then
+    echo "Process not found"
+    exit $EXIT_SUCCESS
+  fi
+fi
 
 if [ -z "$pid" ] && [ -z "$pids" ]; then
   echo "Process not found"
@@ -130,4 +123,3 @@ RSS:
   $(floor2f $(calc "($total_resident_set_memory/1024)")) MB
   $total_resident_set_memory KB
 EOF
-

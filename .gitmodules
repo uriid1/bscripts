@@ -1,0 +1,3 @@
+[submodule "lib/bash-libs"]
+	path = vendor/bash-libs
+	url = https://github.com/bash-labs/bash-libs.git

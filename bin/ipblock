@@ -1,7 +1,22 @@
 #!/usr/bin/env bash
+#
+# By: uriid1
+# Blocking IP addresses of domains using iptables.
 
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/net.sh"
+source "${LIB_DIR}/string.sh"
+source "${LIB_DIR}/log.sh"
+
+readonly version="1.0"
 
 print_help() {
   local sname=$(echo "$0" | sed 's/.*\///')
@@ -36,59 +51,32 @@ case "$1" in
   ;;
 esac
 
-__interface=$(ip -j link show | jq -r '.[] | select(.ifname | test("^en")) | .ifname')
-__chains=()
-__domains=()
+arg::spec list --domains -d
+arg::spec list --chains -c
+arg::spec value --interface -i
+arg::parse "$@"
 
-while [[ "$#" -gt 0 ]]; do
-  case "$1" in
-    --domains | -d)
-      shift
-      while [[ "$#" -gt 0 && "$1" != --* && "$1" != -* ]]; do
-        __domains+=("$1")
-        shift
-      done
-    ;;
+__default_interface=$(ip -j link show | jq -r '.[] | select(.ifname | test("^en")) | .ifname')
+__interface=$(arg::get --interface "$__default_interface")
 
-    --chains | -c)
-      shift
-      while [[ "$#" -gt 0 && "$1" != --* && "$1" != -* ]]; do
-        __chains+=("$1")
-        shift
-      done
-    ;;
-
-    --interface | -i)
-      if [ -n "$2" ]; then
-        __interface="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
-
-  *)
-    shift
-  ;;
-  esac
-done
+mapfile -t __domains < <(arg::list --domains)
+mapfile -t __chains < <(arg::list --chains)
 
 sudo -v
 for domain in "${__domains[@]}"; do
   IPS=$(dig +short $domain)
   for IP in $IPS; do
-    if [[ $IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    if net::is_ip "$IP"; then
       for chain in "${__chains[@]}"; do
-        echo "Blocked: domain: $domain Ip: $IP Chain: $chain"
-        case $chain in
-          "FORWARD" | "forward")
+        log::info "Blocked: domain: $domain Ip: $IP Chain: $chain"
+        case "$(string::lower "$chain")" in
+          forward)
             sudo iptables -A FORWARD -i $__interface -d $IP -j REJECT
           ;;
-          "OUTPUT" | "output")
+          output)
             sudo iptables -A OUTPUT -o $__interface -d $IP -j REJECT
           ;;
-          "INPUT" | "input")
+          input)
             sudo iptables -A INPUT -i $__interface -s $IP -j REJECT
           ;;
         esac

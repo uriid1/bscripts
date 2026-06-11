@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
 
 print_help() {
   local sname=$(echo "$0" | sed 's/.*\///')
@@ -38,34 +45,13 @@ case "$1" in
   ;;
 esac
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --timeout | -t | -T)
-      if [ -n "$2" ]; then
-        timeout="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
+arg::spec value --timeout -t -T
+arg::spec value --script -s -S
 
-    --script | -s | -S)
-      if [ -n "$2" ]; then
-        script="$2"
-        shift 2
-      else
-        echo "Missing argument for $1 option"
-        exit $EXIT_FAILURE
-      fi
-    ;;
+arg::parse "$@"
 
-    *)
-      echo "Invalid argument: $1"
-      exit $EXIT_FAILURE
-    ;;
-  esac
-done
+timeout=$(arg::get --timeout)
+script=$(arg::get --script)
 
 # $1 - value
 is_number() {
@@ -102,7 +88,7 @@ parse_time() {
     h | H)
       echo "$((value * 3600))"
     ;;
-    
+
     *)
       echo "-1";
       exit $EXIT_FAILURE

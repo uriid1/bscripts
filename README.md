@@ -3,6 +3,21 @@
 Небольшой набор bash скриптов, которые я "ношу с собой", для решения различных задач. </br>
 Часть скриптов не имеет описания, но имеет флаг --help, с помощью которого можно узнать для чего нужен скрипт и как его использовать.
 
+# Зависимости
+
+Скрипты используют вспомогательную библиотеку [bash-libs](https://github.com/bash-labs/bash-libs),
+подключённую как git-сабмодуль в `vendor/bash-libs` (модули доступны через симлинк `lib` → `vendor/bash-libs/lib`).
+При клонировании репозитория тяните его вместе с сабмодулями:
+
+```bash
+git clone --recurse-submodules <repo-url>
+# или, если уже склонировали без сабмодулей:
+git submodule update --init --recursive
+```
+
+`install` инициализирует сабмодуль автоматически (если он пуст) и копирует библиотеку
+рядом со скриптами, поэтому установленные команды находят её по относительному пути.
+
 # Установка / Удаление
 
 Установка:
@@ -17,12 +32,12 @@ chmod +x uninstall && ./uninstall
 
 ## Использование
 
-**usage**
+**dusort**
 
 Скрипт для определения размеров файла(ов). </br>
 Например, чтобы определить размер директории /var/log и так же, самый большой файл в ней:
 ```bash
-usage /var/log/*
+dusort /var/log/*
 ```
 
 Фактически это тоже самое, что делает `du`, за исключением того, что весь вывод сортируется по убыванию.
@@ -42,23 +57,23 @@ wiso --iso ~/iso/manjaro-kde.iso
 
 ----
 
-**blockdomain**
+**ipblock**
 
 Блокирует ip-адреса домена через iptables.
 Пример:
 ```bash
-blockdomain --domains site-one.com site-two.com --interface eth0 --chains FORWARD OUTPUT INPUT
+ipblock --domains site-one.com site-two.com --interface eth0 --chains FORWARD OUTPUT INPUT
 ```
 
 ----
 
-**puse**
+**psmem**
 
 Определение виртуальной и резистивной памяти процесса по pid или его имени.
 
 Пример:
 ```bash
-puse --name firefox
+psmem --name firefox
 ```
 
 ----
@@ -75,46 +90,46 @@ myip --public
 
 ----
 
-**adbrp**
+**adbpush**
 
 Рекурсивная отправка файлов по `adb`. </br>
 Скрипт писался с учетом, что нужно поместить какую-то директорию со всем содержимым в корневую директорию устройства.
 
 Пример:
 ```bash
-adbrp --root my_local_lib/ /vendor/my_lib/
+adbpush --root my_local_lib/ /vendor/my_lib/
 ```
 
 ----
 
-**ds**
+**loc**
 
 Подсчет файлов заданного формата и кол-во в них строк. </br>
 Пример, посчитает сколько файлов .js и .json в директории, в которой находитесь:
 ```bash
-ds --formats json js
+loc --formats json js
 ```
 
 Пример, с указанием директории:
 ```bash
-ds --dir ~/js_dir --formats js json ts
+loc --dir ~/js_dir --formats js json ts
 ```
 
 ----
 
-**disableipv6**
+**noipv6**
 
 Отключает ipv6 и меняет TTL на заданный.
 
 ----
 
-**imgtoframe**
+**imgframe**
 
 Вписывает изображение в белый квадрат, по сути создавая рамку.
 
 Пример:
 ```bash
-imgtoframe -i input.jpg -w 800 -h 600 -f 20 -o output.png
+imgframe -i input.jpg -w 800 -h 600 -f 20 -o output.png
 ```
 
 ----

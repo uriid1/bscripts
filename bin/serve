@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# By: uriid1
+#   Run an local HTTP server.
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/net.sh"
+source "${LIB_DIR}/log.sh"
+source "${LIB_DIR}/jsonq.sh"
+
+print_help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Run an local HTTP server.
+
+Usage:
+  $sname [OPTIONS]
+
+Options:
+  --path <directory>  Set the path for serving files (default: \$HOME)
+  --port <port>       Set the port (default: 8000)
+
+Example:
+  $sname --path \$HOME/public
+EOF
+}
+
+case "$1" in
+  --help | -h)
+    print_help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+arg::spec value --path
+arg::spec value --port
+arg::parse "$@"
+
+path=$(arg::get --path "$HOME")
+port=$(arg::get --port 8000)
+
+ip=$(jsonq::get "$(ip -j a)" 'first(.[] | select(.ifname | startswith("en")) | .addr_info[0].local)')
+
+if ! net::is_port "$port"; then
+  log::warn "Invalid port: $port"
+  exit $EXIT_FAILURE
+fi
+
+echo -e "${C_GREEN}-->${C_DEF} HTTP Server started: $ip:$port"
+python -m http.server --directory "$path" $port

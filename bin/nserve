@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/log.sh"
+
+log::info "Starting nginx (http://localhost:8080, docroot=$(pwd))"
+
+docker run -it --rm \
+  --name my-nginx \
+  -p 8080:80 \
+  -v $(pwd):/usr/share/nginx/html \
+  nginx:alpine \
+  sh -c "sed -i 's/location \/ {/location \/ { autoindex on;/' /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"

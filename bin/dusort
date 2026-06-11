@@ -1,9 +1,21 @@
-#!/bin/env bash
+#!/usr/bin/env bash
+#
+# By: uriid1
+#   Space of used files.
 
-readonly EXIT_SUCCESS=0
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/fs.sh"
 
 print_help() {
-  local sname=$(echo "$0" | sed 's/.*\///')
+  local sname
+  sname=$(fs::basename "$0")
 
 cat <<EOF
 By: uriid1
@@ -17,7 +29,7 @@ EOF
 case "$1" in
   --help | -h)
     print_help
-    exit $EXIT_SUCCESS
+    exit "$EXIT_SUCCESS"
   ;;
 esac
 

@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
+#
+# wiso - write ISO images to USB devices
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/colors.sh"
+source "${LIB_DIR}/arg.sh"
 
 # Constants
 readonly version="1.1"
 readonly c_error='\033[5m'
-readonly c_yellow='\033[33m'
-readonly c_red='\033[31m'
-readonly c_green='\033[32m'
-readonly c_def='\033[0m'
-
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
 
 # Global variables
 error=0
@@ -46,62 +52,33 @@ case "$1" in
   ;;
 esac
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --find-path | -FP | -fp)
-      if [ -z "$2" ]; then
-        echo "An argument is expected for the $1 option."
-        exit $EXIT_FAILURE
-      fi
+arg::spec value --find-path -fp -FP
+arg::spec value --iso -i -I
+arg::parse "$@"
 
-      findpath="$2"
-      shift 2
-    ;;
-
-    --iso | -I | -i)
-      if [ -z "$2" ]; then
-        echo "An argument is expected for the $1 option."
-        exit $EXIT_FAILURE
-      fi
-
-      isopath="$2"
-      shift 2
-    ;;
-
-    *)
-      echo "Error: Invalid option or argument: $1"
-      exit $EXIT_FAILURE
-    ;;
-  esac
-done
+findpath=$(arg::get --find-path "/home/$USER")
+isopath=$(arg::get --iso)
 
 # Display important information
-echo -e "By: ${c_green}uriid1${c_def}"
-echo -e "Version: ${c_yellow}$version${c_def}\n"
+echo -e "By: ${C_GREEN}uriid1${C_DEF}"
+echo -e "Version: ${C_YELLOW}$version${C_DEF}\n"
 
 # Check for the existence of required tools in the OS
 parr=(dd readlink find sed lsblk wipefs head)
 
-pcheck() {
-  local pname=$(which $1 . 2>/dev/null)
-
-  if [ -n "$pname" ]; then
-    echo "${c_green}Ok${c_def}"
-  else
-    echo "${c_error}${c_red}Fail${c_def}"
-  fi
-}
-
 # If all required software is available
 echo -e "Checking tools:"
 for ((i = 0; i < ${#parr[*]}; ++i)); do
-  satus=$(pcheck ${parr[$i]})
+  tool=${parr[$i]}
 
-  if [ "$status" == "Fail" ]; then
+  if command -v "$tool" >/dev/null 2>&1; then
+    status="${C_GREEN}Ok${C_DEF}"
+  else
+    status="${c_error}${C_RED}Fail${C_DEF}"
     error=$((error+1))
   fi
 
-  pinfo+=( $(echo "|${parr[$i]}|-|$satus|\n") )
+  pinfo+=( $(echo "|${tool}|-|${status}|\n") )
 done
 
 if ! [ "$error" -le "0" ]; then
@@ -164,7 +141,7 @@ find_iso() {
 
   local usb_count=$((${#iso_list[*]}-1))
   read -p "Select the ISO image (0-$usb_count): " iso
-  
+
   return 0
 }
 

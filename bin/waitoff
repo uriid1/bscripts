@@ -1,7 +1,17 @@
-#!/bin/env bash
+#!/usr/bin/env bash
+#
+# By: uriid1
+#   Shutdown automatically when process completes.
 
-readonly EXIT_SUCCESS=0
-readonly EXIT_FAILURE=1
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/proc.sh"
 
 print_help() {
   local sname=$(echo "$0" | sed 's/.*\///')
@@ -37,7 +47,7 @@ else
 fi
 
 echo "[$PID]: Wait $(ps -p "$PID" -o comm=) to stop..."
-while kill -0 $PID 2>/dev/null; do
+while proc::is_running "$PID"; do
   sleep 10
 done
 

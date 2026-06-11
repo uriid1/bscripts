@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/proc.sh"
+source "${LIB_DIR}/fs.sh"
+source "${LIB_DIR}/log.sh"
+
+readonly _VERSION='1.0'
+
+print_help() {
+  local sname=$(echo "$0" | sed 's/.*\///')
+
+cat <<EOF
+By: uriid1
+  Version: $_VERSION
+
+Usage:
+  $sname --process <binary> [--start|--stop|--status|--restart]
+
+Options:
+  --start       Start process
+  --stop        Stop process
+  --status      Show process status
+  --restart     Restart process
+  --process     Path to binary or command name
+
+Example:
+  $sname --process "./mybinfile" --start
+EOF
+}
+
+process_name=
+process_pid=
+process_log=
+
+setvars() {
+  local name="$1"
+  process_name="$name"
+  process_log="${process_name}.log"
+  process_pid="${process_name}.pid"
+}
+
+start() {
+  if fs::is_file "$process_pid"; then
+    local pid
+    pid=$(<"$process_pid")
+
+    if proc::is_running "$pid"; then
+      log::info "${process_name} already running (PID: $pid)"
+      exit $EXIT_SUCCESS
+    else
+      log::warn "Remove old pid file..."
+      rm -f "$process_pid"
+    fi
+  fi
+
+  log::info "$process_name stated..."
+  nohup "$process_name" >>"$process_log" 2>&1 < /dev/null &
+  echo $! > "$process_pid"
+
+  echo "PID: $(<"$process_pid")"
+  echo "LOG: $process_log"
+}
+
+stop() {
+  if ! fs::is_file "$process_pid"; then
+    log::info "${process_name} not running (PID file non exists)"
+    exit $EXIT_SUCCESS
+  fi
+
+  local pid=$(<"$process_pid")
+
+  if proc::is_running "$pid"; then
+    log::info "${process_name} stopping (PID: $pid)..."
+
+    kill "$pid"
+    sleep 1
+    if proc::is_running "$pid"; then
+      log::warn "Force stop..."
+      kill -9 "$pid"
+    fi
+  else
+    log::warn "${process_name} process not found | Remove pid-file"
+  fi
+
+  rm -f "$process_pid"
+  log::info "${process_name} stopped"
+}
+
+status() {
+  if fs::is_file "$process_pid"; then
+    local pid=$(<"$process_pid")
+
+    if proc::is_running "$pid"; then
+      log::info "${process_name} is working (PID: $pid)"
+      exit $EXIT_SUCCESS
+    else
+      log::warn "PID-file not found, but process not active"
+      exit $EXIT_FAILURE
+    fi
+  else
+    log::info "${process_name} not running..."
+    exit $EXIT_FAILURE
+  fi
+}
+
+case "$1" in
+  --help | -h)
+    print_help
+    exit $EXIT_SUCCESS
+  ;;
+esac
+
+arg::spec value --process
+arg::spec flag --start
+arg::spec flag --stop
+arg::spec flag --status
+arg::spec flag --restart
+
+arg::parse "$@"
+
+process_name=$(arg::get --process)
+if [[ -z "${process_name}" ]]; then
+  echo "Error: --process argument is required"
+  exit $EXIT_FAILURE
+fi
+setvars "$process_name"
+
+if arg::has --restart; then
+  stop
+  start
+else
+  if arg::has --stop; then
+    stop
+  fi
+  if arg::has --start; then
+    start
+  fi
+  if arg::has --status; then
+    status
+  fi
+fi
