@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+#
+# By: uriid1
+#   Resolve a domain to its IPs, or an IP to its domain (PTR),
+#   querying several DNS servers.
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/net.sh"
+source "${LIB_DIR}/colors.sh"
+
+# Default DNS servers (used unless --dns is given):
+#   8.8.8.8         Google
+#   1.1.1.1         Cloudflare
+#   9.9.9.9         Quad9
+#   77.88.8.8       Yandex
+#   208.67.222.222  OpenDNS
+readonly DEFAULT_DNS=(8.8.8.8 1.1.1.1 9.9.9.9 77.88.8.8 208.67.222.222)
+
+# Per-query caps so a dead / black-holed DNS server never hangs the script.
+readonly DIG_TIME=2
+readonly DIG_TRIES=1
+
+print_help() {
+  local sname="${0##*/}"
+
+cat <<EOF
+By: uriid1
+  Resolve a domain to its IPs, or an IP to its domain (PTR),
+  querying several DNS servers.
+
+Usage:
+  $sname <target> [OPTIONS]
+
+  <target>  Domain name (forward A/AAAA) or IP address (reverse/PTR).
+
+Options:
+  --dns, -d <server...>  Explicit DNS server(s); overrides the default list.
+  --help, -h             Show this help and exit.
+
+Examples:
+  $sname example.com
+  $sname 8.8.8.8
+  $sname example.com --dns 1.1.1.1 9.9.9.9
+EOF
+}
+
+# Early --help / no-args handling (matches the other scripts).
+case "${1:-}" in
+  --help | -h | "")
+    print_help
+    exit "$EXIT_SUCCESS"
+  ;;
+esac
+
+# dig is mandatory.
+if ! command -v dig >/dev/null 2>&1; then
+  echo -e "${C_RED}Error: 'dig' not found. Install it (bind-tools / dnsutils).${C_DEF}" >&2
+  exit "$EXIT_FAILURE"
+fi
+
+arg::spec list --dns -d
+arg::parse "$@"
+
+# Target: first positional argument. Required.
+mapfile -t __rest < <(arg::rest)
+readonly target="${__rest[0]:-}"
+if [[ -z "$target" ]]; then
+  echo -e "${C_RED}Error: no target given (domain or IP).${C_DEF}" >&2
+  echo "Use --help for usage information." >&2
+  exit "$EXIT_FAILURE"
+fi
+
+# DNS server list: explicit --dns overrides the default.
+mapfile -t servers < <(arg::list --dns)
+if [[ ${#servers[@]} -eq 0 ]]; then
+  servers=("${DEFAULT_DNS[@]}")
+fi
+
+# Mode detection:
+#   reverse (PTR) for IPv4 (net::is_ip) or anything containing ':' (IPv6 heuristic);
+#   forward otherwise.
+if net::is_ip "$target" || [[ "$target" == *:* ]]; then
+  mode="reverse"
+else
+  mode="forward"
+fi
+
+# Run dig for one server and echo the answer(s) comma-joined, or "(no record)"
+# when empty. Time/tries are capped so a dead server can never hang us.
+query_one() {
+  local srv="$1"
+  local out
+
+  if [[ "$mode" == "reverse" ]]; then
+    out="$(dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" -x "$target" 2>/dev/null)"
+  else
+    # A and AAAA so both IPv4 and IPv6 records show up.
+    out="$(dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" "$target" A    2>/dev/null
+           dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" "$target" AAAA 2>/dev/null)"
+  fi
+
+  # Keep only real answer lines. On a dead/unreachable server dig prints
+  # diagnostics (";; communications error ...", ";; no servers could be
+  # reached") to stdout; those start with ';' and are not records.
+  local records=()
+  local line
+  while IFS= read -r line; do
+    [[ -z "${line// /}" ]] && continue
+    [[ "$line" == ";"* ]] && continue
+    records+=("$line")
+  done <<< "$out"
+
+  if [[ ${#records[@]} -eq 0 ]]; then
+    printf '%s' "(no record)"
+    return
+  fi
+
+  local joined="${records[0]}"
+  local r
+  for r in "${records[@]:1}"; do
+    joined+=", $r"
+  done
+  printf '%s' "$joined"
+}
+
+# Header: what we resolve, the mode, and how many servers were queried.
+if [[ "$mode" == "reverse" ]]; then
+  echo -e "${C_MAGENTA}Resolving IP ${target} (reverse PTR) via ${#servers[@]} DNS servers:${C_DEF}"
+else
+  echo -e "${C_MAGENTA}Resolving domain ${target} (forward A/AAAA) via ${#servers[@]} DNS servers:${C_DEF}"
+fi
+
+# Column width: widest server name, for aligned output.
+width=0
+for srv in "${servers[@]}"; do
+  (( ${#srv} > width )) && width=${#srv}
+done
+
+for srv in "${servers[@]}"; do
+  result="$(query_one "$srv")"
+  if [[ "$result" == "(no record)" ]]; then
+    printf "  %-${width}s   -> ${C_YELLOW}%s${C_DEF}\n" "$srv" "$result"
+  else
+    printf "  %-${width}s   -> ${C_GREEN}%s${C_DEF}\n" "$srv" "$result"
+  fi
+done
+
+exit "$EXIT_SUCCESS"
