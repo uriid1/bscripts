@@ -23,7 +23,7 @@ warn() {
 #
 # Checking that base tools installed 
 #
-base_tools=(adb dig iptables wc sysctl curl python bc readlink lsblk column jq)
+base_tools=(adb dig iptables wc sysctl curl openssl python bc readlink lsblk column jq)
 
 for ((i = 0; i < ${#base_tools[*]}; ++i)); do
   tool="${base_tools[$i]}"

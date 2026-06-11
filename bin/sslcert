@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+#
+# By: uriid1
+#   Issue or delete a Let's Encrypt certificate for <ip>.sslip.io
+#   via certbot running in docker.
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/net.sh"
+source "${LIB_DIR}/colors.sh"
+
+# --- Defaults (edit to taste; all overridable via flags) -------------------
+readonly DEFAULT_EMAIL="you@example.com"               # certbot account email (--email)
+readonly DEFAULT_CERTS_DIR="${PWD}/deploy/nginx/certs" # mounted at /etc/letsencrypt (--certs)
+readonly DEFAULT_WEBROOT="${PWD}/deploy/nginx/www"     # mounted at /var/www/certbot (--webroot)
+readonly CERTBOT_IMAGE="certbot/certbot"
+
+# Strict IPv4 check: net::is_ip matches the shape but not octet ranges
+# (it accepts 999.1.1.1), so validate each octet is 0-255 here.
+valid_ipv4() {
+  local ip="$1" IFS='.' o
+  net::is_ip "$ip" || return 1
+  for o in $ip; do
+    (( 10#$o <= 255 )) || return 1
+  done
+  return 0
+}
+
+print_help() {
+  local sname="${0##*/}"
+
+cat <<EOF
+By: uriid1
+  Issue or delete a Let's Encrypt certificate for <ip>.sslip.io via certbot (docker).
+  sslip.io is automatic DNS: <ip>.sslip.io always resolves to <ip>.
+
+Usage:
+  $sname <ip> (--check | --issue | --delete) [OPTIONS]
+
+Actions:
+  --check              Show <ip>.sslip.io and verify it resolves to <ip>.
+  --issue              Issue the certificate (certbot certonly --webroot).
+  --delete             Delete the certificate (certbot delete).
+
+Options:
+  --ip, -i <ip>        Target IPv4 (or pass it positionally). Required.
+  --email, -e <addr>   Account email for issuance (default: ${DEFAULT_EMAIL}).
+  --certs <dir>        Cert storage, mounted at /etc/letsencrypt.
+  --webroot, -w <dir>  ACME webroot, mounted at /var/www/certbot.
+  --staging            Use Let's Encrypt staging (no rate limits; for testing).
+  --dry-run, -n        Print the command(s) without running them.
+  --help, -h           Show this help and exit.
+
+Examples:
+  $sname 185.17.120.242 --check
+  $sname 185.17.120.242 --issue --email me@example.com
+  $sname --ip 185.17.120.242 --issue --staging --dry-run
+  $sname 185.17.120.242 --delete
+
+Notes:
+  - The webroot must be served by a web server (e.g. nginx) on port 80 for
+    <ip>.sslip.io so the ACME http-01 challenge can be answered.
+  - The IP must be publicly reachable on port 80.
+  - Let's Encrypt enforces rate limits; use --staging while testing.
+EOF
+}
+
+# Early --help / no-args handling (matches the other scripts).
+case "${1:-}" in
+  --help | -h | "")
+    print_help
+    exit "$EXIT_SUCCESS"
+  ;;
+esac
+
+arg::spec value --ip -i
+arg::spec flag  --check
+arg::spec flag  --issue
+arg::spec flag  --delete
+arg::spec value --email -e
+arg::spec value --certs
+arg::spec value --webroot -w
+arg::spec flag  --staging
+arg::spec flag  --dry-run -n
+arg::parse "$@"
+
+# --- Target IP: --ip or first positional. Required, IPv4. ------------------
+ip="$(arg::get --ip)"
+if [[ -z "$ip" ]]; then
+  mapfile -t __rest < <(arg::rest)
+  ip="${__rest[0]:-}"
+fi
+if [[ -z "$ip" ]]; then
+  echo -e "${C_RED}Error: no IP given. Pass it positionally or with --ip.${C_DEF}" >&2
+  echo "Use --help for usage information." >&2
+  exit "$EXIT_FAILURE"
+fi
+if ! valid_ipv4 "$ip"; then
+  echo -e "${C_RED}Error: '${ip}' is not a valid IPv4 address.${C_DEF}" >&2
+  exit "$EXIT_FAILURE"
+fi
+
+readonly domain="${ip}.sslip.io"
+readonly email="$(arg::get --email "$DEFAULT_EMAIL")"
+readonly certs_dir="$(arg::get --certs "$DEFAULT_CERTS_DIR")"
+readonly webroot="$(arg::get --webroot "$DEFAULT_WEBROOT")"
+
+# --- Action selection ------------------------------------------------------
+if ! arg::has --check && ! arg::has --issue && ! arg::has --delete; then
+  echo -e "${C_RED}Error: no action. Use one of --check / --issue / --delete.${C_DEF}" >&2
+  echo "Use --help for usage information." >&2
+  exit "$EXIT_FAILURE"
+fi
+if arg::has --issue && arg::has --delete; then
+  echo -e "${C_RED}Error: --issue and --delete are mutually exclusive.${C_DEF}" >&2
+  exit "$EXIT_FAILURE"
+fi
+
+# sudo only when not already root (matches the documented `sudo docker`).
+SUDO=()
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  SUDO=(sudo)
+fi
+
+dry_run=""
+arg::has --dry-run && dry_run=1
+
+# Run a command, or in --dry-run just print it (no side effects).
+run_cmd() {
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} $*"
+    return 0
+  fi
+  "$@"
+}
+
+# docker is needed only for real issue/delete (not --check, not --dry-run).
+need_docker() {
+  [[ -n "$dry_run" ]] && return 0
+  if ! command -v docker >/dev/null 2>&1; then
+    echo -e "${C_RED}Error: 'docker' not found.${C_DEF}" >&2
+    exit "$EXIT_FAILURE"
+  fi
+}
+
+do_check() {
+  echo -e "${C_MAGENTA}Check ${domain}:${C_DEF}"
+  local resolved
+  resolved="$(dig +short +time=2 +tries=1 "$domain" 2>/dev/null \
+    | grep -vE '^;|^[[:space:]]*$' | head -n1)"
+  if [[ "$resolved" == "$ip" ]]; then
+    echo -e "  ${C_GREEN}OK: ${domain} -> ${ip}${C_DEF}"
+  else
+    echo -e "  ${C_YELLOW}MISMATCH: ${domain} -> ${resolved:-(no record)} (expected ${ip})${C_DEF}"
+  fi
+}
+
+do_issue() {
+  need_docker
+  [[ -z "$dry_run" ]] && mkdir -p "$certs_dir" "$webroot"
+
+  echo -e "${C_MAGENTA}Issue certificate for ${domain}:${C_DEF}"
+  local cmd=(
+    "${SUDO[@]}" docker run --rm
+    -v "${certs_dir}:/etc/letsencrypt"
+    -v "${webroot}:/var/www/certbot"
+    "$CERTBOT_IMAGE" certonly --webroot -w /var/www/certbot
+    -d "$domain" --email "$email" --agree-tos --no-eff-email
+  )
+  arg::has --staging && cmd+=(--staging)
+  run_cmd "${cmd[@]}"
+}
+
+do_delete() {
+  need_docker
+  echo -e "${C_MAGENTA}Delete certificate for ${domain}:${C_DEF}"
+  local cmd=(
+    "${SUDO[@]}" docker run --rm
+    -v "${certs_dir}:/etc/letsencrypt"
+    "$CERTBOT_IMAGE" delete --cert-name "$domain"
+  )
+  run_cmd "${cmd[@]}"
+}
+
+# --- Dispatch: --check may precede --issue; --issue/--delete are exclusive. -
+arg::has --check  && do_check
+arg::has --issue  && do_issue
+arg::has --delete && do_delete
+
+exit "$EXIT_SUCCESS"

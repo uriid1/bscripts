@@ -43,12 +43,21 @@ Usage:
 
 Options:
   --dns, -d <server...>  Explicit DNS server(s); overrides the default list.
+  --trace, -t            Round-trip check: domain->IP->PTR (or IP->PTR->IP),
+                         flagging whether it maps back (MATCH/MISMATCH).
+  --cert, -c             Domain names from the TLS certificate on <target>:443
+                         (CN + SAN). Useful to learn a domain from an IP.
+  --reverse-ip, -r       Domains pointing at the IP, via a public passive-DNS
+                         service (hackertarget). Sends the IP to a third party.
   --help, -h             Show this help and exit.
 
 Examples:
   $sname example.com
   $sname 8.8.8.8
   $sname example.com --dns 1.1.1.1 9.9.9.9
+  $sname example.com --trace
+  $sname 185.17.120.242 --cert
+  $sname 185.17.120.242 --reverse-ip
 EOF
 }
 
@@ -67,6 +76,9 @@ if ! command -v dig >/dev/null 2>&1; then
 fi
 
 arg::spec list --dns -d
+arg::spec flag --trace -t
+arg::spec flag --cert -c
+arg::spec flag --reverse-ip -r
 arg::parse "$@"
 
 # Target: first positional argument. Required.
@@ -93,43 +105,218 @@ else
   mode="forward"
 fi
 
-# Run dig for one server and echo the answer(s) comma-joined, or "(no record)"
-# when empty. Time/tries are capped so a dead server can never hang us.
+# Run dig (+short, capped time/tries so a dead server can't hang us) against
+# one server and emit only real answer lines. On unreachable servers dig prints
+# ";; ..." diagnostics to stdout; those (and blank lines) are dropped.
+dig_clean() {
+  local srv="$1"
+  shift
+  dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" "$@" 2>/dev/null \
+    | grep -vE '^;|^[[:space:]]*$'
+}
+
+# Join arguments with ", ".
+join_records() {
+  local out="" first=1 x
+  for x in "$@"; do
+    if [[ $first -eq 1 ]]; then out="$x"; first=0; else out+=", $x"; fi
+  done
+  printf '%s' "$out"
+}
+
+# Resolve $target on one server per the global $mode; echo the answer(s)
+# joined, or "(no record)" when empty.
 query_one() {
   local srv="$1"
-  local out
+  local records=()
 
   if [[ "$mode" == "reverse" ]]; then
-    out="$(dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" -x "$target" 2>/dev/null)"
+    mapfile -t records < <(dig_clean "$srv" -x "$target")
   else
     # A and AAAA so both IPv4 and IPv6 records show up.
-    out="$(dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" "$target" A    2>/dev/null
-           dig +short +time="$DIG_TIME" +tries="$DIG_TRIES" @"$srv" "$target" AAAA 2>/dev/null)"
+    mapfile -t records < <(dig_clean "$srv" "$target" A; dig_clean "$srv" "$target" AAAA)
   fi
-
-  # Keep only real answer lines. On a dead/unreachable server dig prints
-  # diagnostics (";; communications error ...", ";; no servers could be
-  # reached") to stdout; those start with ';' and are not records.
-  local records=()
-  local line
-  while IFS= read -r line; do
-    [[ -z "${line// /}" ]] && continue
-    [[ "$line" == ";"* ]] && continue
-    records+=("$line")
-  done <<< "$out"
 
   if [[ ${#records[@]} -eq 0 ]]; then
     printf '%s' "(no record)"
     return
   fi
-
-  local joined="${records[0]}"
-  local r
-  for r in "${records[@]:1}"; do
-    joined+=", $r"
-  done
-  printf '%s' "$joined"
+  join_records "${records[@]}"
 }
+
+# --trace for a domain: domain -> A/AAAA -> PTR of each IP, flagging whether the
+# PTR maps back to the domain.
+trace_domain() {
+  local srv="$1" dom="$2"
+  echo -e "${C_MAGENTA}Trace ${dom} (via ${srv}):${C_DEF}"
+
+  local ips
+  mapfile -t ips < <(dig_clean "$srv" "$dom" A; dig_clean "$srv" "$dom" AAAA)
+  if [[ ${#ips[@]} -eq 0 ]]; then
+    echo -e "  ${dom}  A/AAAA ->  ${C_YELLOW}(no record)${C_DEF}"
+    return
+  fi
+
+  local ip ptrs ptr host
+  for ip in "${ips[@]}"; do
+    echo -e "  ${dom}  ->  ${C_GREEN}${ip}${C_DEF}"
+    mapfile -t ptrs < <(dig_clean "$srv" -x "$ip")
+    if [[ ${#ptrs[@]} -eq 0 ]]; then
+      echo -e "      ${ip}  PTR ->  ${C_YELLOW}(no record)${C_DEF}"
+      continue
+    fi
+    for ptr in "${ptrs[@]}"; do
+      host="${ptr%.}"
+      if [[ "${host,,}" == "${dom,,}" ]]; then
+        echo -e "      ${ip}  PTR ->  ${C_GREEN}${ptr}  [MATCH]${C_DEF}"
+      else
+        echo -e "      ${ip}  PTR ->  ${ptr}  ${C_YELLOW}[MISMATCH != ${dom}]${C_DEF}"
+      fi
+    done
+  done
+}
+
+# --trace for an IP (forward-confirmed reverse DNS): IP -> PTR -> forward the
+# PTR host, flagging whether the original IP comes back.
+trace_ip() {
+  local srv="$1" ip="$2"
+  echo -e "${C_MAGENTA}Trace ${ip} (via ${srv}):${C_DEF}"
+
+  local ptrs
+  mapfile -t ptrs < <(dig_clean "$srv" -x "$ip")
+  if [[ ${#ptrs[@]} -eq 0 ]]; then
+    echo -e "  ${ip}  PTR ->  ${C_YELLOW}(no record)${C_DEF}"
+    return
+  fi
+
+  local ptr host fwd f matched
+  for ptr in "${ptrs[@]}"; do
+    host="${ptr%.}"
+    echo -e "  ${ip}  PTR ->  ${C_GREEN}${ptr}${C_DEF}"
+    mapfile -t fwd < <(dig_clean "$srv" "$host" A; dig_clean "$srv" "$host" AAAA)
+    if [[ ${#fwd[@]} -eq 0 ]]; then
+      echo -e "      ${host}  A/AAAA ->  ${C_YELLOW}(no record)${C_DEF}"
+      continue
+    fi
+    matched=0
+    for f in "${fwd[@]}"; do
+      [[ "$f" == "$ip" ]] && matched=1
+    done
+    if [[ $matched -eq 1 ]]; then
+      echo -e "      ${host}  ->  ${C_GREEN}$(join_records "${fwd[@]}")  [MATCH: forward-confirmed]${C_DEF}"
+    else
+      echo -e "      ${host}  ->  $(join_records "${fwd[@]}")  ${C_YELLOW}[MISMATCH: ${ip} not in forward]${C_DEF}"
+    fi
+  done
+}
+
+# --cert: domain names from the TLS certificate served on <target>:443.
+# Sends SNI for a hostname target; takes the default cert for a bare IP.
+cert_domains() {
+  local host="$1"
+  local port=443
+  local connect sni=() to=()
+
+  if [[ "$host" == *:* ]]; then
+    connect="[${host}]:${port}"          # IPv6 literal needs brackets
+  else
+    connect="${host}:${port}"
+  fi
+  if ! net::is_ip "$host" && [[ "$host" != *:* ]]; then
+    sni=(-servername "$host")            # SNI only for hostnames
+  fi
+  command -v timeout >/dev/null 2>&1 && to=(timeout 8)
+
+  echo -e "${C_MAGENTA}TLS certificate names for ${host}:${port}:${C_DEF}"
+
+  local cert
+  cert="$(echo | "${to[@]}" openssl s_client -connect "$connect" "${sni[@]}" 2>/dev/null)"
+  if [[ -z "$cert" ]]; then
+    echo -e "  ${C_YELLOW}(no TLS response on port ${port})${C_DEF}"
+    return
+  fi
+
+  # CN from the subject + every SAN DNS entry, normalized and de-duplicated.
+  local names
+  names="$(printf '%s\n' "$cert" \
+    | openssl x509 -noout -subject -ext subjectAltName 2>/dev/null \
+    | grep -oE 'DNS:[^,]+|CN ?= ?[^,]+' \
+    | sed -E 's/^DNS://; s/^CN ?= ?//; s/^[[:space:]]+//; s/[[:space:]]+$//' \
+    | sort -u)"
+
+  if [[ -z "$names" ]]; then
+    echo -e "  ${C_YELLOW}(certificate exposes no DNS names)${C_DEF}"
+    return
+  fi
+  local n
+  while IFS= read -r n; do
+    [[ -z "$n" ]] && continue
+    echo -e "  ${C_GREEN}${n}${C_DEF}"
+  done <<< "$names"
+}
+
+# --reverse-ip: ask a public passive-DNS service which domains point at the IP.
+# A hostname target is resolved to its first IP first.
+reverse_ip() {
+  local ip="$1"
+
+  if ! net::is_ip "$ip" && [[ "$ip" != *:* ]]; then
+    local resolved
+    resolved="$(dig_clean "${servers[0]}" "$ip" A | head -n1)"
+    if [[ -z "$resolved" ]]; then
+      echo -e "${C_RED}Error: could not resolve ${ip} to an IP.${C_DEF}" >&2
+      return 1
+    fi
+    echo -e "${C_MAGENTA}Domains sharing ${resolved} (resolved from ${ip}) [passive DNS]:${C_DEF}"
+    ip="$resolved"
+  else
+    echo -e "${C_MAGENTA}Domains pointing at ${ip} [passive DNS]:${C_DEF}"
+  fi
+
+  local out
+  out="$(curl -s --max-time 10 "https://api.hackertarget.com/reverseiplookup/?q=${ip}" 2>/dev/null)"
+
+  if [[ -z "$out" ]]; then
+    echo -e "  ${C_YELLOW}(no response from service)${C_DEF}"
+    return
+  fi
+  # The API reports problems as plain text rather than via HTTP status.
+  case "$out" in
+    *"API count exceeded"* | *error* | *"No DNS"* | *Invalid*)
+      echo -e "  ${C_YELLOW}${out}${C_DEF}"
+      return
+    ;;
+  esac
+
+  local d
+  while IFS= read -r d; do
+    [[ -z "$d" ]] && continue
+    echo -e "  ${C_GREEN}${d}${C_DEF}"
+  done <<< "$out"
+}
+
+# Alternative actions below short-circuit the normal multi-server lookup.
+if arg::has --cert; then
+  command -v openssl >/dev/null 2>&1 || { echo -e "${C_RED}Error: 'openssl' not found.${C_DEF}" >&2; exit "$EXIT_FAILURE"; }
+  cert_domains "$target"
+  exit "$EXIT_SUCCESS"
+fi
+
+if arg::has --reverse-ip; then
+  command -v curl >/dev/null 2>&1 || { echo -e "${C_RED}Error: 'curl' not found.${C_DEF}" >&2; exit "$EXIT_FAILURE"; }
+  reverse_ip "$target"
+  exit "$EXIT_SUCCESS"
+fi
+
+# --trace: round-trip consistency check via the first server in the list.
+if arg::has --trace; then
+  if [[ "$mode" == "reverse" ]]; then
+    trace_ip "${servers[0]}" "$target"
+  else
+    trace_domain "${servers[0]}" "$target"
+  fi
+  exit "$EXIT_SUCCESS"
+fi
 
 # Header: what we resolve, the mode, and how many servers were queried.
 if [[ "$mode" == "reverse" ]]; then
