@@ -1,0 +1,547 @@
+#!/usr/bin/env bash
+#
+# By: uriid1
+#   Run a command (GUI or CLI) outside the WireGuard/VPN tunnel using a
+#   network namespace. The chosen app gets direct internet through the
+#   physical link, while the rest of the system keeps using the VPN.
+#   The tunnel itself is never modified.
+#
+#   How it works: a veth pair bridges the host and an isolated namespace.
+#   Traffic leaving the namespace is policy-routed (by source subnet) to the
+#   physical gateway, bypassing WireGuard's catch-all rule, and masqueraded
+#   to the physical IP. Because the namespace has no VPN route at all, source
+#   address selection is correct from the start (unlike fwmark-on-the-host).
+
+__BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly LIB_DIR="${__BIN_DIR}/../lib"
+if [[ ! -f "${LIB_DIR}/const.sh" ]]; then
+  echo "Error: bash-libs not found at ${LIB_DIR}. Run: git submodule update --init" >&2
+  exit 1
+fi
+
+source "${LIB_DIR}/const.sh"
+source "${LIB_DIR}/arg.sh"
+source "${LIB_DIR}/net.sh"
+source "${LIB_DIR}/colors.sh"
+
+# Defaults (all overridable via flags)
+readonly DEFAULT_NAME="novpn"
+readonly DEFAULT_DNS="1.1.1.1,8.8.8.8,9.9.9.9"   # resolver(s) for the namespace (CSV)
+readonly DEFAULT_SUBNET="10.200.200"     # /24; .1 = host side, .2 = namespace
+
+# Custom routing table + rule priority for the bypass. The priority must be
+# LOWER (evaluated earlier) than WireGuard's rules (~31026/31027) so the
+# namespace subnet escapes the VPN catch-all. Table 5151 avoids wg-quick's
+# usual range.
+readonly RT_TABLE=5151
+readonly RT_PRIO=1000
+
+# Session variables forwarded into the app so GUI programs work after we drop
+# privileges. HOME is intentionally omitted (runuser sets it for the target
+# user). Only the ones that are actually set get forwarded.
+readonly FORWARD_ENV=(
+  DISPLAY WAYLAND_DISPLAY XAUTHORITY
+  XDG_RUNTIME_DIR XDG_SESSION_TYPE XDG_CURRENT_DESKTOP
+  DBUS_SESSION_BUS_ADDRESS
+  XDG_DATA_DIRS XDG_CONFIG_DIRS
+  QT_QPA_PLATFORM GDK_BACKEND
+  LANG LC_ALL LANGUAGE
+  PATH TERM
+)
+
+print_help() {
+  local sname="${0##*/}"
+
+cat <<EOF
+By: uriid1
+  Run a command outside the WireGuard/VPN tunnel via a network namespace.
+  The chosen app gets direct internet through the physical link; the rest of
+  the system keeps using the VPN. The tunnel itself is never modified.
+
+Usage:
+  $sname [OPTIONS] <command> [args...]   Run <command> outside the VPN
+  $sname [OPTIONS] --up                  Set up the namespace only
+  $sname [OPTIONS] --down                Tear the namespace down
+  $sname [OPTIONS] --status              Show current state
+
+Options:
+  --name <ns>       Namespace name (default: ${DEFAULT_NAME}).
+  --dns <csv>       Resolver(s) for the namespace (default: ${DEFAULT_DNS}).
+  --subnet <a.b.c>  /24 for the veth pair (default: ${DEFAULT_SUBNET};
+                    .1 = host side, .2 = namespace).
+  --if <iface>      Physical interface (auto-detected by default).
+  --gw <ip>         Physical gateway (auto-detected by default).
+  --user <user>     Run the app as this user (default: invoking user).
+  --no-isolate      Don't add browser isolation flags (advanced; see Notes).
+  --dry-run, -n     Print the commands without executing them.
+  --help, -h        Show this help and exit.
+
+Examples:
+  $sname firefox                          # browser without VPN (auto-isolated)
+  $sname curl ifconfig.me                 # check the bypass: shows real IP
+  $sname --up                             # prepare once, reuse for many apps
+  $sname --status
+  $sname --down
+
+Notes:
+  - Run WITHOUT sudo: novpn escalates internally (asks your password once) and
+    preserves your GUI session (DISPLAY/WAYLAND) so graphical apps work.
+  - Launch from a terminal so the sudo password prompt has somewhere to go.
+  - The namespace persists until --down, so several apps can share it.
+  - DNS inside the namespace also bypasses the VPN (resolves as if no tunnel).
+  - Single-instance browsers (Firefox/Chromium/Brave/...) are auto-started as a
+    separate, isolated instance with a per-namespace profile under
+    ~/.local/share/novpn/; otherwise they'd just hand the request to the copy
+    already running on the VPN. Turn this off with --no-isolate, or pass your
+    own -P/--profile/--user-data-dir (then only --no-remote is added).
+EOF
+}
+
+# Early --help / no-args handling (matches the other scripts).
+case "${1:-}" in
+  --help | -h | "")
+    print_help
+    exit "$EXIT_SUCCESS"
+  ;;
+esac
+
+# Split argv into our options vs. the command
+# Like sudo/env: option parsing stops at the first non-option token, so flags
+# meant for the command (e.g. firefox --no-remote) are passed through verbatim.
+# Keep the value-option list below in sync with the arg::spec block.
+declare -a OPTARGS=()
+declare -a cmd=()
+split_args() {
+  local a
+  while [[ $# -gt 0 ]]; do
+    a="$1"
+    case "$a" in
+      --)
+        shift; cmd=("$@"); return ;;
+      --up | --down | --status | --dry-run | -n | --no-isolate | --help | -h)
+        OPTARGS+=("$a"); shift ;;
+      --name | --dns | -d | --subnet | --if | --gw | --user | -u)
+        OPTARGS+=("$a")
+        if [[ $# -ge 2 ]]; then OPTARGS+=("$2"); shift 2; else shift; fi ;;
+      --name=* | --dns=* | --subnet=* | --if=* | --gw=* | --user=*)
+        OPTARGS+=("$a"); shift ;;
+      *)
+        # First positional (or an unknown option) begins the command.
+        cmd=("$@"); return ;;
+    esac
+  done
+}
+split_args "$@"
+
+arg::spec flag  --up
+arg::spec flag  --down
+arg::spec flag  --status
+arg::spec flag  --dry-run -n
+arg::spec flag  --no-isolate
+arg::spec flag  --help -h
+arg::spec value --name
+arg::spec value --dns -d
+arg::spec value --subnet
+arg::spec value --if
+arg::spec value --gw
+arg::spec value --user -u
+arg::parse "${OPTARGS[@]+"${OPTARGS[@]}"}"
+
+arg::has --help && { print_help; exit "$EXIT_SUCCESS"; }
+
+# Resolve configuration
+dry_run=""
+arg::has --dry-run && dry_run=1
+
+ns="$(arg::get --name "$DEFAULT_NAME")"
+veth_h="${ns}-h"
+veth_n="${ns}-n"
+
+subnet3="$(arg::get --subnet "$DEFAULT_SUBNET")"
+host_ip="${subnet3}.1"
+ns_ip="${subnet3}.2"
+subnet_cidr="${subnet3}.0/24"
+
+# Default to the invoking user. We do NOT re-exec the whole script under sudo
+# (that would strip the GUI env), so $(id -un) is the real user; $SUDO_USER
+# covers the case where someone runs `sudo novpn` anyway.
+default_user="${SUDO_USER:-$(id -un)}"
+run_user="$(arg::get --user "$default_user")"
+
+# sudo only when not already root (matches the other scripts).
+SUDO=()
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  SUDO=(sudo)
+fi
+
+PHYS_IF="" PHYS_GW=""
+
+err()  { echo -e "${C_RED}Error: $1${C_DEF}" >&2; }
+warn() { echo -e "${C_YELLOW}[!]${C_DEF} $1" >&2; }
+info() { echo -e "${C_MAGENTA}$1${C_DEF}"; }
+
+validate_config() {
+  # veth names are capped at 15 chars -> ns name <= 13.
+  if ! [[ "$ns" =~ ^[A-Za-z][A-Za-z0-9_-]{0,12}$ ]]; then
+    err "invalid --name '${ns}' (1-13 chars: letter first, then alnum/_/-)."
+    exit "$EXIT_FAILURE"
+  fi
+  if ! [[ "$subnet3" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    err "invalid --subnet '${subnet3}' (expected three octets, e.g. 10.200.200)."
+    exit "$EXIT_FAILURE"
+  fi
+}
+
+# Print the command in --dry-run, otherwise execute it.
+run() {
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} $*"
+    return 0
+  fi
+  "$@"
+}
+
+# Physical link / gateway detection
+# The VPN is full-tunnel via policy routing, so the main-table default already
+# points at the physical gateway. We still skip wireguard interfaces to be safe
+# on other setups. --if / --gw override detection.
+detect_phys() {
+  local want_if want_gw
+  want_if="$(arg::get --if)"
+  want_gw="$(arg::get --gw)"
+
+  local wgs=() w
+  mapfile -t wgs < <(ip -o link show type wireguard 2>/dev/null | awk -F': ' '{print $2}')
+
+  local line dev gw is_wg
+  while IFS= read -r line; do
+    dev="$(awk '{for (i=1;i<=NF;i++) if ($i=="dev") print $(i+1)}' <<< "$line")"
+    gw="$(awk  '{for (i=1;i<=NF;i++) if ($i=="via") print $(i+1)}' <<< "$line")"
+    [[ -z "$dev" || -z "$gw" ]] && continue
+    is_wg=0
+    for w in "${wgs[@]}"; do [[ "$dev" == "$w" ]] && is_wg=1; done
+    [[ $is_wg -eq 1 ]] && continue
+    PHYS_IF="$dev"; PHYS_GW="$gw"; break
+  done < <(ip -o route show default 2>/dev/null)
+
+  [[ -n "$want_if" ]] && PHYS_IF="$want_if"
+  [[ -n "$want_gw" ]] && PHYS_GW="$want_gw"
+}
+
+require_phys() {
+  if [[ -z "$PHYS_IF" || -z "$PHYS_GW" ]]; then
+    err "could not detect the physical link/gateway."
+    echo "Pass them explicitly: --if <iface> --gw <ip>" >&2
+    exit "$EXIT_FAILURE"
+  fi
+  if ! net::is_ip "$PHYS_GW"; then
+    err "gateway '${PHYS_GW}' is not an IPv4 address."
+    exit "$EXIT_FAILURE"
+  fi
+  if ! net::if_exists "$PHYS_IF"; then
+    err "interface '${PHYS_IF}' does not exist."
+    exit "$EXIT_FAILURE"
+  fi
+}
+
+# State checks
+ns_exists() {
+  ip netns list 2>/dev/null | awk '{print $1}' | grep -qx "$ns"
+}
+
+# Ready = namespace exists and its veth carries the expected address.
+ns_ready() {
+  ns_exists || return 1
+  "${SUDO[@]}" ip netns exec "$ns" ip -o addr show dev "$veth_n" 2>/dev/null \
+    | grep -q "$ns_ip"
+}
+
+# Strict reverse-path filtering would drop the masqueraded replies (they arrive
+# on the physical link while the route to the origin is via the VPN). Warn if
+# the effective value is strict; loose (2) or off (0) is fine.
+check_rpf() {
+  local a i eff
+  a="$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null || echo 0)"
+  i="$(sysctl -n "net.ipv4.conf.${PHYS_IF}.rp_filter" 2>/dev/null || echo 0)"
+  eff=$(( a > i ? a : i ))
+  if [[ "$eff" == "1" ]]; then
+    warn "Strict rp_filter on ${PHYS_IF}; return traffic may be dropped."
+    warn "If apps can't connect: sudo sysctl -w net.ipv4.conf.${PHYS_IF}.rp_filter=2"
+  fi
+}
+
+ensure_forward() {
+  local cur
+  cur="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"
+  [[ "$cur" == "1" ]] && return 0
+  run "${SUDO[@]}" sysctl -w net.ipv4.ip_forward=1 >/dev/null
+  warn "Enabled net.ipv4.ip_forward (was ${cur}); left enabled on --down."
+}
+
+write_resolv() {
+  local servers s
+  servers="$(arg::get --dns "$DEFAULT_DNS")"
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} write /etc/netns/${ns}/resolv.conf (${servers})"
+    return 0
+  fi
+  "${SUDO[@]}" mkdir -p "/etc/netns/${ns}"
+  {
+    local IFS=','
+    for s in $servers; do
+      [[ -n "$s" ]] && printf 'nameserver %s\n' "$s"
+    done
+  } | "${SUDO[@]}" tee "/etc/netns/${ns}/resolv.conf" >/dev/null
+}
+
+# Add the policy-routing rule once (ip rule add always appends, so guard it).
+add_rule_once() {
+  if [[ -n "$dry_run" ]]; then
+    run "${SUDO[@]}" ip rule add from "$subnet_cidr" table "$RT_TABLE" priority "$RT_PRIO"
+    return 0
+  fi
+  ip rule show 2>/dev/null | grep -q "from ${subnet_cidr} lookup ${RT_TABLE}" && return 0
+  "${SUDO[@]}" ip rule add from "$subnet_cidr" table "$RT_TABLE" priority "$RT_PRIO"
+}
+
+# Add an iptables rule once. Args are the full "-t <table> -A <chain> ..." spec;
+# we flip -A to -C to test for existence first (idempotent).
+ipt_once() {
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} ${SUDO[*]} iptables $*"
+    return 0
+  fi
+  local check=("$@") i
+  for i in "${!check[@]}"; do [[ "${check[i]}" == "-A" ]] && check[i]="-C"; done
+  "${SUDO[@]}" iptables "${check[@]}" 2>/dev/null && return 0
+  "${SUDO[@]}" iptables "$@"
+}
+
+# Delete an iptables rule given the same "-A" spec (flip -A to -D, ignore miss).
+ipt_del() {
+  local d=("$@") i
+  for i in "${!d[@]}"; do [[ "${d[i]}" == "-A" ]] && d[i]="-D"; done
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} ${SUDO[*]} iptables ${d[*]}"
+    return 0
+  fi
+  "${SUDO[@]}" iptables "${d[@]}" 2>/dev/null || true
+}
+
+# Teardown
+teardown_core() {
+  # Firewall: same specs as setup (flipped to -D).
+  ipt_del -t nat    -A POSTROUTING -s "$subnet_cidr" -o "$PHYS_IF" -j MASQUERADE
+  ipt_del -t filter -A FORWARD -i "$veth_h" -o "$PHYS_IF" -j ACCEPT
+  ipt_del -t filter -A FORWARD -i "$PHYS_IF" -o "$veth_h" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+
+  # Policy rule (remove every copy, but never loop forever).
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} ${SUDO[*]} ip rule del from ${subnet_cidr} table ${RT_TABLE}"
+  else
+    while ip rule show 2>/dev/null | grep -q "from ${subnet_cidr} lookup ${RT_TABLE}"; do
+      "${SUDO[@]}" ip rule del from "$subnet_cidr" table "$RT_TABLE" 2>/dev/null || break
+    done
+  fi
+
+  run "${SUDO[@]}" ip route flush table "$RT_TABLE" 2>/dev/null
+  # Deleting the host end removes the veth pair; deleting the ns removes its side.
+  run "${SUDO[@]}" ip link del "$veth_h" 2>/dev/null
+  run "${SUDO[@]}" ip netns del "$ns" 2>/dev/null
+  run "${SUDO[@]}" rm -rf "/etc/netns/${ns}"
+}
+
+do_down() {
+  info "Tearing down namespace '${ns}'..."
+  teardown_core
+  [[ -z "$dry_run" ]] && info "Done."
+}
+
+# Setup
+setup_full() {
+  # Clear any partial/broken leftovers for this name first (idempotent).
+  teardown_core
+
+  info "Setting up namespace '${ns}' (bypassing VPN via ${PHYS_IF} -> ${PHYS_GW})..."
+  check_rpf
+
+  # 1. Namespace + veth pair, one end moved into the namespace.
+  run "${SUDO[@]}" ip netns add "$ns"
+  run "${SUDO[@]}" ip link add "$veth_h" type veth peer name "$veth_n"
+  run "${SUDO[@]}" ip link set "$veth_n" netns "$ns"
+
+  # 2. Host side of the link.
+  run "${SUDO[@]}" ip addr add "${host_ip}/24" dev "$veth_h"
+  run "${SUDO[@]}" ip link set "$veth_h" up
+
+  # 3. Namespace side: address, loopback, default via the host end.
+  run "${SUDO[@]}" ip -n "$ns" addr add "${ns_ip}/24" dev "$veth_n"
+  run "${SUDO[@]}" ip -n "$ns" link set "$veth_n" up
+  run "${SUDO[@]}" ip -n "$ns" link set lo up
+  run "${SUDO[@]}" ip -n "$ns" route add default via "$host_ip"
+
+  # 4. Namespace DNS (also outside the tunnel).
+  write_resolv
+
+  # 5. Routing of forwarded packets requires ip_forward.
+  ensure_forward
+
+  # 6. Policy routing: traffic from the namespace subnet uses a table whose
+  #    default is the physical gateway, evaluated BEFORE WireGuard's rules.
+  run "${SUDO[@]}" ip route replace default via "$PHYS_GW" dev "$PHYS_IF" table "$RT_TABLE"
+  add_rule_once
+
+  # 7. Masquerade the private subnet onto the physical IP + allow forwarding.
+  ipt_once -t nat    -A POSTROUTING -s "$subnet_cidr" -o "$PHYS_IF" -j MASQUERADE
+  ipt_once -t filter -A FORWARD -i "$veth_h" -o "$PHYS_IF" -j ACCEPT
+  ipt_once -t filter -A FORWARD -i "$PHYS_IF" -o "$veth_h" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+}
+
+ensure_up() {
+  if [[ -z "$dry_run" ]] && ns_ready; then
+    return 0
+  fi
+  setup_full
+}
+
+# Browser isolation
+# True if the command (argv after cmd[0]) already carries <flag> (exact or =form).
+cmd_has_flag() {
+  local want="$1" a
+  for a in "${cmd[@]:1}"; do
+    [[ "$a" == "$want" || "$a" == "${want}="* ]] && return 0
+  done
+  return 1
+}
+
+# Single-instance GUI apps (browsers) hand the request to an already-running
+# copy instead of starting fresh -- and that copy sits on the VPN, so the new
+# window is NOT bypassed. For known browsers we inject per-namespace isolation
+# flags so a real, separate instance starts and actually uses the bypass.
+# Other commands are left untouched. Opt out with --no-isolate; pass your own
+# -P/--profile/--user-data-dir to keep control of the profile.
+isolate_cmd() {
+  arg::has --no-isolate && return 0
+  [[ ${#cmd[@]} -gt 0 ]] || return 0
+
+  local base="${cmd[0]##*/}"
+  local home dir pre=()
+  home="$(getent passwd "$run_user" 2>/dev/null | cut -d: -f6)"
+  [[ -n "$home" ]] || home="$HOME"
+  dir="${home}/.local/share/novpn/${ns}/${base}"
+
+  case "$base" in
+    firefox | firefox-bin | firefox-esr | librewolf | waterfox*)
+      cmd_has_flag --no-remote || pre+=(--no-remote)
+      if ! cmd_has_flag -P && ! cmd_has_flag -profile && ! cmd_has_flag --profile; then
+        pre+=(--profile "$dir")
+      fi
+      ;;
+    chromium | chromium-browser | google-chrome | google-chrome-stable \
+      | brave | brave-browser | vivaldi | vivaldi-stable \
+      | microsoft-edge | microsoft-edge-stable)
+      cmd_has_flag --user-data-dir || pre+=(--user-data-dir="$dir")
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  [[ ${#pre[@]} -gt 0 ]] || return 0
+  cmd=( "${cmd[0]}" "${pre[@]}" "${cmd[@]:1}" )
+  warn "${base}: starting an isolated instance so it doesn't hand off to the"
+  warn "    copy already on the VPN (profile: ${dir}; disable with --no-isolate)."
+  [[ -z "$dry_run" ]] && mkdir -p "$dir" 2>/dev/null
+}
+
+# Run a command in the namespace
+do_run() {
+  isolate_cmd
+  ensure_up
+
+  if [[ -z "$dry_run" ]] && ! ns_ready; then
+    err "namespace '${ns}' is not ready after setup."
+    exit "$EXIT_FAILURE"
+  fi
+
+  if [[ "${EUID:-$(id -u)}" -eq 0 && -n "${SUDO_USER:-}" ]]; then
+    warn "Running under sudo: GUI vars (DISPLAY/WAYLAND) may be missing."
+    warn "For graphical apps, run without sudo: ${0##*/} <app>"
+  fi
+
+  # Forward the session env explicitly (survives the sudo/runuser boundary as
+  # argv, not environment).
+  local env_kv=() v
+  for v in "${FORWARD_ENV[@]}"; do
+    [[ -n "${!v:-}" ]] && env_kv+=("${v}=${!v}")
+  done
+
+  # Drop back to the target user inside the namespace.
+  local drop
+  if command -v runuser >/dev/null 2>&1; then
+    drop=(runuser -u "$run_user" --)
+  else
+    drop=(sudo -u "$run_user" --)
+  fi
+
+  local launch=( "${SUDO[@]}" ip netns exec "$ns" "${drop[@]}" env "${env_kv[@]}" "${cmd[@]}" )
+
+  if [[ -n "$dry_run" ]]; then
+    echo -e "${C_YELLOW}[dry-run]${C_DEF} ${launch[*]}"
+    exit "$EXIT_SUCCESS"
+  fi
+  exec "${launch[@]}"
+}
+
+# Status
+do_status() {
+  detect_phys
+  info "novpn status"
+  printf '  %-12s %s\n' "namespace" "$ns"
+  printf '  %-12s %s\n' "veth"      "${veth_h} <-> ${veth_n}"
+  printf '  %-12s %s\n' "subnet"    "${subnet_cidr} (host ${host_ip}, ns ${ns_ip})"
+  printf '  %-12s %s\n' "phys link" "${PHYS_IF:-?} via ${PHYS_GW:-?}"
+  printf '  %-12s %s\n' "rt table"  "${RT_TABLE} (priority ${RT_PRIO})"
+  printf '  %-12s %s\n' "dns"       "$(arg::get --dns "$DEFAULT_DNS")"
+  printf '  %-12s %s\n' "run as"    "$run_user"
+
+  if ns_exists; then
+    echo -e "  ${C_GREEN}namespace present${C_DEF}"
+  else
+    echo -e "  ${C_YELLOW}namespace not present${C_DEF}"
+  fi
+  if ip rule show 2>/dev/null | grep -q "from ${subnet_cidr} lookup ${RT_TABLE}"; then
+    echo -e "  ${C_GREEN}policy rule present${C_DEF}"
+  else
+    echo -e "  ${C_YELLOW}policy rule absent${C_DEF}"
+  fi
+  echo "  verify the bypass with: ${0##*/} curl -s ifconfig.me"
+}
+
+# Dispatch
+validate_config
+
+if arg::has --status; then
+  do_status
+  exit "$EXIT_SUCCESS"
+fi
+
+if arg::has --down; then
+  detect_phys
+  do_down
+  exit "$EXIT_SUCCESS"
+fi
+
+detect_phys
+require_phys
+
+if [[ ${#cmd[@]} -gt 0 ]]; then
+  do_run
+elif arg::has --up; then
+  ensure_up
+  [[ -z "$dry_run" ]] && info "Namespace '${ns}' is up. Run apps with: ${0##*/} <app>"
+else
+  print_help
+fi
+
+exit "$EXIT_SUCCESS"
